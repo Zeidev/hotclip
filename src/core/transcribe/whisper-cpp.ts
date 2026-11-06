@@ -25,6 +25,8 @@ import { dirname, basename, join } from "path";
 import { promisify } from "util";
 import { resolveFfmpegPath } from "../binaries";
 import { probeMedia } from "../probe";
+import { readAppSettings } from "../app-settings";
+import { userDataDir } from "../appenv";
 import { rebuildWords } from "../../shared/edit-transcript";
 import { bpeTokensToWords } from "./sherpa-offline";
 import { segmentWords } from "./segment";
@@ -41,10 +43,17 @@ export interface WhisperCppConfig {
   noGpu?: boolean;
 }
 
-/** Read the user-managed binary + model from the environment. */
-export function resolveWhisperCpp(env: NodeJS.ProcessEnv = process.env): WhisperCppConfig | null {
-  const binary = env.HOTCLIP_WHISPER_CPP_BIN?.trim();
-  const model = env.HOTCLIP_WHISPER_CPP_MODEL?.trim();
+/**
+ * Resolve the whisper.cpp binary + model. Environment variables win (scripted
+ * and CI use); otherwise the paths saved from the settings screen are used, so
+ * a desktop user never has to touch environment variables.
+ */
+export function resolveWhisperCpp(
+  env: NodeJS.ProcessEnv = process.env,
+  stored: { whisperCppBin?: string; whisperCppModel?: string } = readAppSettings(userDataDir())
+): WhisperCppConfig | null {
+  const binary = env.HOTCLIP_WHISPER_CPP_BIN?.trim() || stored.whisperCppBin?.trim();
+  const model = env.HOTCLIP_WHISPER_CPP_MODEL?.trim() || stored.whisperCppModel?.trim();
   return binary && model ? { binary, model, noGpu: env.HOTCLIP_WHISPER_CPP_NO_GPU === "1" } : null;
 }
 

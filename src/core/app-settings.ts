@@ -11,10 +11,18 @@ import { join } from "path";
 export interface AppSettings {
   /** 模型存放根目录;缺省 = <userData>/models。 */
   modelsDir?: string;
+  /** whisper.cpp GPU 档的可执行文件(用户自备);环境变量优先于它。 */
+  whisperCppBin?: string;
+  /** whisper.cpp GPU 档的 ggml 模型文件。 */
+  whisperCppModel?: string;
 }
 
 export function settingsPath(userDataDir: string): string {
   return join(userDataDir, "settings.json");
+}
+
+function clean(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 /** 读设置;文件缺失或损坏一律回落出厂默认——设置读不出来绝不该挡住出片。 */
@@ -22,8 +30,15 @@ export function readAppSettings(userDataDir: string): AppSettings {
   try {
     const parsed = JSON.parse(readFileSync(settingsPath(userDataDir), "utf8")) as unknown;
     if (!parsed || typeof parsed !== "object") return {};
-    const dir = (parsed as AppSettings).modelsDir;
-    return typeof dir === "string" && dir.trim() ? { modelsDir: dir.trim() } : {};
+    const raw = parsed as AppSettings;
+    const settings: AppSettings = {};
+    const modelsDir = clean(raw.modelsDir);
+    const whisperCppBin = clean(raw.whisperCppBin);
+    const whisperCppModel = clean(raw.whisperCppModel);
+    if (modelsDir) settings.modelsDir = modelsDir;
+    if (whisperCppBin) settings.whisperCppBin = whisperCppBin;
+    if (whisperCppModel) settings.whisperCppModel = whisperCppModel;
+    return settings;
   } catch {
     return {};
   }

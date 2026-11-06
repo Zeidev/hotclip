@@ -45,7 +45,7 @@ import { Switch, SwitchRow } from "./ui";
 import { GlossaryModal } from "./GlossaryModal";
 import { BrandStyleModal } from "./BrandStyleModal";
 import { WatchFolderModal } from "./WatchFolderModal";
-import type { AsrEngineInfo, CaptionStyleChoice, DiagnosticsProgressEvent, DiagnosticsReport, ExportQuality, ModelsInfo, PerformanceEntry, PerformanceExperiment, PerformanceMatchSummary, PerformanceSummary } from "../../../shared/api-types";
+import type { AsrEngineInfo, CaptionStyleChoice, DiagnosticsProgressEvent, DiagnosticsReport, ExportQuality, ModelsInfo, PerformanceEntry, PerformanceExperiment, PerformanceMatchSummary, PerformanceSummary, WhisperCppStatus } from "../../../shared/api-types";
 
 type NavKey = "ai" | "asr" | "storage" | "diagnostics" | "performance" | "brand" | "glossary" | "watch" | "lang";
 
@@ -726,6 +726,108 @@ function AsrSection(): React.JSX.Element {
 }
 
 /** 导出与存储分区(原 SettingsModal 的四节)。 */
+/**
+ * whisper.cpp (GPU) 接线:用户自备二进制与 ggml 模型,这里只选路径并存进
+ * settings.json——桌面用户不该为了跑 GPU 去设环境变量(环境变量仍然优先)。
+ */
+function WhisperCppSection(): React.JSX.Element {
+  const t = useT("settings");
+  const [status, setStatus] = useState<WhisperCppStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (): Promise<void> => {
+    setStatus(await getApi().whisperCppGet().catch(() => null));
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const save = async (binary: string | null, model: string | null): Promise<void> => {
+    setError(null);
+    setBusy(true);
+    try {
+      setStatus(await getApi().whisperCppSet(binary, model));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Pick one half; the other keeps whatever is already stored. */
+  const pick = async (kind: "binary" | "model"): Promise<void> => {
+    const chosen = await getApi().selectWhisperCppFile(kind).catch(() => null);
+    if (!chosen) return;
+    await save(
+      kind === "binary" ? chosen : status?.stored.binary ?? null,
+      kind === "model" ? chosen : status?.stored.model ?? null
+    );
+  };
+
+  const ready = Boolean(status?.binary && status?.model);
+
+  return (
+    <section>
+      <h3 className="flex items-center gap-2 text-[13.5px] font-bold">
+        <LuFlaskConical className="h-4 w-4 text-ember" />
+        {t("whisperCppTitle")}
+      </h3>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-mut">{t("whisperCppDesc")}</p>
+      <div className="mt-3 rounded-xl bg-panel-2 px-3.5 py-3">
+        {(["binary", "model"] as const).map((kind) => {
+          const value = kind === "binary" ? status?.stored.binary : status?.stored.model;
+          return (
+            <div key={kind} className="flex flex-wrap items-center gap-2 py-1">
+              <span className="w-28 shrink-0 text-[11.5px] font-semibold text-mut">
+                {t(kind === "binary" ? "whisperCppBinary" : "whisperCppModel")}
+              </span>
+              <span className={`min-w-0 flex-1 truncate font-mono text-[11px] ${value ? "text-fg" : "text-mut/60"}`}>
+                {value ?? t("whisperCppNotSet")}
+              </span>
+              {isElectron() && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void pick(kind)}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-[12px] font-semibold whitespace-nowrap text-mut transition-colors hover:border-mut hover:text-fg disabled:opacity-40"
+                >
+                  <LuFolderSearch className="h-3.5 w-3.5" />
+                  {t("whisperCppPick")}
+                </button>
+              )}
+            </div>
+          );
+        })}
+        <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-line pt-2.5">
+          <span className={`inline-flex items-center gap-1.5 text-[11.5px] ${ready ? "text-emerald-400" : "text-amber-300/90"}`}>
+            {ready ? <LuCircleCheck className="h-3.5 w-3.5" /> : <LuTriangleAlert className="h-3.5 w-3.5" />}
+            {ready ? t("whisperCppReady") : t("whisperCppMissing")}
+          </span>
+          {status?.fromEnv && <span className="text-[11px] text-mut">{t("whisperCppEnvNote")}</span>}
+          {busy && <LuLoaderCircle className="h-3.5 w-3.5 animate-spin text-mut" />}
+          {(status?.stored.binary || status?.stored.model) && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void save(null, null)}
+              className="ml-auto shrink-0 text-[12px] text-mut underline-offset-2 transition-colors hover:text-fg hover:underline disabled:opacity-40"
+            >
+              {t("whisperCppClear")}
+            </button>
+          )}
+        </div>
+        {error && (
+          <p className="mt-2 flex items-start gap-1.5 text-[11.5px] break-all text-red-400">
+            <LuTriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            {error}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function StorageSection(): React.JSX.Element {
   const t = useT("settings");
   const { prefs, setPref } = useRenderPrefs();
@@ -1173,6 +1275,7 @@ export function SettingsView(): React.JSX.Element {
           {nav === "ai" && <AiSection />}
           {nav === "asr" && <AsrSection />}
           {nav === "storage" && <StorageSection />}
+          {nav === "storage" && <WhisperCppSection />}
           {nav === "diagnostics" && <DiagnosticsSection />}
           {nav === "performance" && <PerformanceSection />}
           {nav === "brand" && entry(tb("desc"), tb("title"), () => setShowBrand(true))}

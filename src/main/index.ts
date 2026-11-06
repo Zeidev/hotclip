@@ -23,7 +23,7 @@ import { SenseVoiceEngine } from "@core/transcribe/sensevoice";
 import { ParaformerEngine } from "@core/transcribe/paraformer";
 import { FireRedEngine } from "@core/transcribe/firered";
 import { WhisperEngine } from "@core/transcribe/whisper";
-import { WhisperCppEngine } from "@core/transcribe/whisper-cpp";
+import { WhisperCppEngine, resolveWhisperCpp } from "@core/transcribe/whisper-cpp";
 import { ElevenLabsEngine } from "@core/transcribe/elevenlabs";
 import { readTranscriptCache, writeTranscriptCache } from "@core/transcribe/cache";
 import { importSubtitleText } from "@core/subtitle-import";
@@ -93,7 +93,7 @@ import { wordsInPieces } from "../shared/pieces";
 import { snapContextAround } from "@core/shots";
 import { renderCaptionOverlay } from "./overlay-renderer";
 import { QUALITY_CRF } from "../shared/api-types";
-import type { Transcript, TranscriptWord, LlmConfig, HighlightCandidate, ExportOptions, VisionStats, EmotionStats, DanmakuStats, VoiceTagStats, WatchEvent, UpdateInfo, AutomationTask, AutomationTaskStage } from "../shared/api-types";
+import type { Transcript, TranscriptWord, LlmConfig, HighlightCandidate, ExportOptions, VisionStats, EmotionStats, DanmakuStats, VoiceTagStats, WatchEvent, UpdateInfo, AutomationTask, AutomationTaskStage, WhisperCppStatus } from "../shared/api-types";
 
 const VIDEO_EXTENSIONS = ["mp4", "mkv", "mov", "flv", "ts", "webm", "avi", "m4v"];
 const AUDIO_EXTENSIONS = ["mp3", "m4a", "wav", "aac", "flac"];
@@ -459,6 +459,42 @@ ipcMain.handle("hotclip:models-move", async (_event, dir: unknown) => {
 // 在文件管理器里打开目录(设置页的「打开文件夹」);不存在时静默,别弹系统错误框
 ipcMain.on("hotclip:open-folder", (_event, dir: unknown) => {
   if (typeof dir === "string" && dir.trim()) void shell.openPath(dir);
+});
+
+// ---- IPC: whisper.cpp GPU 档的接线(设置页选路径,免环境变量) ----
+// 环境变量仍优先(脚本/CI 用);设置页只写 settings.json。用户自备二进制与
+// 模型,所以这里不做下载,只做「选、存、报状态」。
+function whisperCppStatus(): WhisperCppStatus {
+  const saved = readAppSettings(app.getPath("userData"));
+  const effective = resolveWhisperCpp(process.env, saved);
+  return {
+    binary: effective?.binary ?? null,
+    model: effective?.model ?? null,
+    fromEnv: Boolean(process.env.HOTCLIP_WHISPER_CPP_BIN?.trim() && process.env.HOTCLIP_WHISPER_CPP_MODEL?.trim()),
+    stored: { binary: saved.whisperCppBin ?? null, model: saved.whisperCppModel ?? null },
+  };
+}
+
+ipcMain.handle("hotclip:whisper-cpp-get", () => whisperCppStatus());
+
+ipcMain.handle("hotclip:whisper-cpp-set", (_event, binary: unknown, model: unknown) => {
+  const userData = app.getPath("userData");
+  const next = readAppSettings(userData);
+  const bin = typeof binary === "string" && binary.trim() ? binary.trim() : undefined;
+  const mdl = typeof model === "string" && model.trim() ? model.trim() : undefined;
+  writeAppSettings(userData, { ...next, whisperCppBin: bin, whisperCppModel: mdl });
+  return whisperCppStatus();
+});
+
+ipcMain.handle("hotclip:select-whisper-cpp-file", async (_event, kind: unknown) => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters: kind === "model"
+      ? [{ name: "ggml model", extensions: ["bin", "ggml", "gguf"] }, { name: "All files", extensions: ["*"] }]
+      : [{ name: "whisper.cpp CLI", extensions: process.platform === "win32" ? ["exe"] : ["*"] }, { name: "All files", extensions: ["*"] }],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
 });
 
 // 录播监听的目录选择

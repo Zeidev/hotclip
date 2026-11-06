@@ -130,32 +130,61 @@ Install `https://aka.ms/vs/17/release/vc_redist.x64.exe` (needs admin), or drop
 those four DLLs next to `whisper-cli.exe`. `pnpm whisper:cpp-setup` runs the CLI
 once and reports this explicitly instead of leaving you with the bare code.
 
-### Measured (same 13.4 s English clip, Ryzen 5 2600 / GTX 1060 6GB)
+### Measured (Turkish, 29.3 s / 6 sentences, Ryzen 5 2600 / GTX 1060 6GB)
 
-| Runtime | Model | Wall clock | Realtime factor |
-|---|---|---|---|
-| sherpa-onnx (bundled, CPU) | large-v3-turbo int8 | 17.2 s | 1.28× |
-| whisper.cpp (CPU build) | ggml-large-v3-turbo q5_0 | 29.8 s | 0.45× |
-| whisper.cpp (**CUDA** build) | ggml-large-v3-turbo q5_0 | 30.6 s | 0.44× |
-| whisper.cpp (CPU build) | ggml-tiny (pipeline smoke only) | 2.5 s | 5.4× |
-| whisper.cpp (CUDA build) | ggml-tiny | ~27 s | 0.5× |
+Word error rate against a human-verified reference, identical audio for every
+runtime (the samples come from `atasoglu/turkish-emotional-speech-11h`):
 
-**Read this before buying the GPU argument.** On this machine the CUDA build is
-*not* faster — not for the turbo model and dramatically not for tiny. The card
-is a Pascal (compute capability 6.1) GTX 1060, where FP16 throughput is 1/64 of
-FP32; whisper.cpp's CUDA kernels lean on FP16 and on tensor-core paths (its
-build reports `ARCHS = 500,610,700,...,900`, so sm_61 is compiled in and does
-run — it is just slow). The encoder alone took 12.3 s of the 30 s run.
+| Runtime | Model | WER | CER | 29.3 s audio | 117 s audio |
+|---|---|---|---|---|---|
+| sherpa-onnx (bundled, CPU) | large-v3-turbo int8 | **40.0 %** | 38.0 % | 40.0 s | — |
+| whisper.cpp (CPU build) | ggml-large-v3-turbo q5_0 | 5.0 % | 2.0 % | 51.4 s | — |
+| whisper.cpp (**CUDA** build) | ggml-large-v3-turbo q5_0 | 5.0 % | 2.3 % | 28.9 s | 44.8 s (2.6× realtime) |
+| whisper.cpp (CPU build) | **ggml whisper-large-v3-turkish** q5_0 | 3.3 % | 0.9 % | 92.3 s | — |
+| whisper.cpp (**CUDA** build) | **ggml whisper-large-v3-turkish** q5_0 | **3.3 %** | **0.9 %** | 32.9 s | 89.4 s (1.31×) |
+
+Three things this table says:
+
+1. **For Turkish, use the fine-tune.** `turkmedstt/whisper-large-v3-turkish-general`
+   (large-v3, Apache-2.0, card: WER 7.92 / CER 2.26) beats multilingual turbo on
+   both error rates, and its ggml conversion already exists on HuggingFace
+   (`JoaoZaokk/whisper-large-v3-turkish-general-ggml`, q4_0 / q5_0 / q8_0) — no
+   conversion step, no torch install. `selimc/whisper-large-v3-turbo-turkish`
+   scored 5.0 % here: usable, but the large-v3 fine-tune is clearly ahead.
+2. **The bundled sherpa tier is not usable for Turkish yet (40 % WER).** Its
+   transcript stops mid-sentence and drops whole sentences because ASR windows
+   are cut at 28 s (`ASR_WINDOW_SEC` in `src/core/transcribe/windowed.ts`) while a
+   Whisper decoder needs context; the CTC tiers tolerate that split, Whisper does
+   not. Fixing the windowing (30 s + overlap, or VAD-based segmentation) is a
+   separate, known task.
+3. **CUDA pays off on long audio, not on short clips.** The CUDA build carries a
+   ~25 s fixed startup cost on this Pascal card (NVRTC/JIT), so a 29 s clip shows
+   almost no gain while 117 s runs at 2.6× realtime (turbo) and 1.31×
+   (large-v3 fine-tune). An hour of Turkish is roughly 23 min (turbo) / 46 min
+   (fine-tune) on this GPU, versus multiple hours on CPU. Earlier numbers in this
+   document that said "CUDA is slower" came from a 13.4 s clip where that fixed
+   cost dominated — long audio is the case that matters.
+
+Caveat: the test audio is synthetic TTS (clean, studio-like), so absolute WER is
+optimistic; trust the **ranking**, not the digits. Re-measure on your own
+recording:
+
+```sh
+pnpm cli transcribe <media> --engine whisper-cpp --language tr --restart-transcription
+```
+
+Prefer the CUDA 12.4 build: the 11.8 build measured worse here (38.8 s on the
+same clip).
 
 Practical guidance:
 
-- **Default to the sherpa-onnx CPU tier** ([whisper:smoke](#using-it)) — same
-  model family, int8, 1.28× realtime, no extra runtime to install.
-- The whisper.cpp tier is worth wiring up on **Turing or newer** NVIDIA
-  (`sm_75+`), Apple Silicon (Metal) or a Vulkan-capable AMD/Intel GPU. Verify on
-  your own box before trusting any table, including this one:
-  `pnpm cli transcribe <media> --engine whisper-cpp --language tr --restart-transcription`
-  (`--restart-transcription` matters: see the cache note below).
+- **Turkish / non-CJK on a GPU box:** `ggml whisper-large-v3-turkish q5_0` +
+  whisper.cpp CUDA, wired from the settings screen (Settings › Storage →
+  Whisper.cpp (GPU), environment variables optional).
+- **Other languages, or no GPU:** the bundled sherpa-onnx tier needs no extra
+  runtime; on a Turing-or-newer NVIDIA card, Apple Silicon (Metal) or a
+  Vulkan-capable AMD/Intel GPU the whisper.cpp tier is worth wiring up.
+- Verify on your own box before trusting any table, including this one.
 
 ### Cache note (fixed while measuring)
 
@@ -224,8 +253,10 @@ Exporting fp32 instead of int8 works too, but roughly triples the size
 - Masaüstünde motor seçiminden **Multilingual · Whisper turbo**; CLI'de `--engine whisper --language tr`; MCP'de `engineId: "whisper"`.
 - Model ~1.04 GB, ilk kullanımda bir kez indirilir (CN aynası öncelikli, devam ettirilebilir, SHA-256 doğrulamalı).
 - **CPU'da yavaş** (809M encoder). Çince/İngilizce içerik için SenseVoice/FireRedASR2 daha mantıklı; Whisper'ı dil kapsamı için seç.
-- Kendi Türkçe fine-tune'unu (ör. `selimc/whisper-large-v3-turbo-turkish`) ONNX'e çevirip `HOTCLIP_WHISPER_MODEL_DIR` ile gösterebilirsin — model indirilmez, dizin sadece doğrulanır.
+- **Türkçe'de ölçülen sonuç:** sherpa turbo int8 **%40 WER** (28 sn pencere sınırı cümleleri düşürüyor — düzeltilecek), whisper.cpp + `ggml whisper-large-v3-turkish q5_0` **%3.3 WER / %0.9 CER**. Türkçe için fine-tune'u kullan.
+- Kendi Türkçe fine-tune'unu ONNX'e çevirip `HOTCLIP_WHISPER_MODEL_DIR` ile gösterebilirsin — model indirilmez, dizin sadece doğrulanır. (Türkçe large-v3 fine-tune'unun ggml hali HuggingFace'de hazır: `JoaoZaokk/whisper-large-v3-turkish-general-ggml`.)
 - GPU paketlenmiş değil: dahili `sherpa-onnx-node` yalnızca CPU. `HOTCLIP_ASR_PROVIDER=cuda|directml` ancak kendi GPU'lu derlemenle çalışır (Windows'ta önerilen EP DirectML'dir).
-- **GPU'nun gerçek yolu:** `pnpm whisper:cpp-setup --cuda` → `HOTCLIP_WHISPER_CPP_BIN` + `HOTCLIP_WHISPER_CPP_MODEL` ver, motordan **Multilingual · Whisper.cpp (GPU)** seç (veya `--engine whisper-cpp`).
-- Windows'ta resmi whisper.cpp derlemeleri MSVC + OpenMP runtime ister (`msvcp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`, `vcomp140.dll`); eksikse `0xC0000135` alırsın. VC++ Redist kur ya da DLL'leri binary'nin yanına koy.
+- **GPU'nun gerçek yolu:** `pnpm whisper:cpp-setup --cuda` **ya da** Ayarlar → Depolama → **Whisper.cpp (GPU)** bölümünden iki dosyayı seç (env değişkeni gerekmez; `HOTCLIP_WHISPER_CPP_BIN` / `_MODEL` verilirse onlar öncelikli). Sonra motordan **Multilingual · Whisper.cpp (GPU)** seç (veya `--engine whisper-cpp`).
+- **CUDA kısa klipte kazandırmaz, uzun seste kazandırır:** Pascal'da ~25 sn sabit başlangıç maliyeti var; 117 sn ses turbo ile 2.6×, tr-large ile 1.31× realtime.
+- Windows'ta resmi whisper.cpp derlemeleri MSVC + OpenMP runtime ister (`msvcp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`, `vcomp140.dll`); eksikse `0xC0000135` alırsın. VC++ Redist kur ya da DLL'leri binary'nin yanına koy. CUDA 12.4 derlemesi 11.8'den daha hızlı ölçüldü.
 - Kontrol: `pnpm whisper:smoke <dosya> tr` → segment/kelime çıktısı + gerçek zaman katsayısı.

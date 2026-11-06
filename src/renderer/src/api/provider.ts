@@ -598,6 +598,17 @@ const browserMock: HotClipApi = {
   openFolder() {
     /* browser mock: no file manager to open */
   },
+  // 浏览器预览没有本机二进制/模型可选:返回「未接线」状态,界面照样能渲染
+  async whisperCppGet() {
+    return { binary: null, model: null, fromEnv: false, stored: { binary: null, model: null } };
+  },
+  async whisperCppSet(binary, model) {
+    await sleep(200);
+    return { binary, model, fromEnv: false, stored: { binary, model } };
+  },
+  async selectWhisperCppFile() {
+    return null;
+  },
   async watchStart(dir) {
     watchRunning = true;
     watchDirDemo = dir;

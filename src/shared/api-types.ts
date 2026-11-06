@@ -138,6 +138,19 @@ export interface AsrEngineInfo {
   installed: boolean;
 }
 
+/**
+ * whisper.cpp GPU tier wiring. `binary`/`model` are the effective pair (an
+ * environment variable wins over the saved setting); `stored` shows what the
+ * settings screen will edit.
+ */
+export interface WhisperCppStatus {
+  binary: string | null;
+  model: string | null;
+  /** True when the effective pair came from HOTCLIP_WHISPER_CPP_* variables. */
+  fromEnv: boolean;
+  stored: { binary: string | null; model: string | null };
+}
+
 export interface TranscribeProgressEvent {
   /** 0..1 fraction of the current stage's work. */
   fraction: number;
@@ -955,6 +968,12 @@ export interface HotClipApi {
   moveModelsDir: (dir: string) => Promise<string>;
   /** 在系统文件管理器里打开一个目录。 */
   openFolder: (path: string) => void;
+  /** whisper.cpp GPU 档的当前接线(环境变量优先于已保存设置)。 */
+  whisperCppGet: () => Promise<WhisperCppStatus>;
+  /** 保存/清除 whisper.cpp 的可执行文件与模型路径。 */
+  whisperCppSet: (binary: string | null, model: string | null) => Promise<WhisperCppStatus>;
+  /** 文件选择器:挑 whisper.cpp 可执行文件或 ggml 模型;取消返回 null。 */
+  selectWhisperCppFile: (kind: "binary" | "model") => Promise<string | null>;
   /** 开始监听文件夹:新录播写完落稳后自动全托管切片。 */
   watchStart: (dir: string, llm: LlmConfig, outDir?: string, detection?: DetectionOptions) => Promise<void>;
   watchStop: () => Promise<void>;

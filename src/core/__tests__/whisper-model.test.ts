@@ -167,13 +167,26 @@ describe("whisper.cpp (GPU tier) result parsing", () => {
 });
 
 describe("whisper.cpp engine configuration", () => {
-  it("needs both the binary and the model from the environment", () => {
-    expect(resolveWhisperCpp({})).toBeNull();
-    expect(resolveWhisperCpp({ HOTCLIP_WHISPER_CPP_BIN: "/bin/whisper-cli" })).toBeNull();
-    expect(resolveWhisperCpp({ HOTCLIP_WHISPER_CPP_BIN: "/bin/whisper-cli", HOTCLIP_WHISPER_CPP_MODEL: " /m/ggml.bin " }))
+  it("needs both the binary and the model, and prefers the environment", () => {
+    expect(resolveWhisperCpp({}, {})).toBeNull();
+    expect(resolveWhisperCpp({ HOTCLIP_WHISPER_CPP_BIN: "/bin/whisper-cli" }, {})).toBeNull();
+    expect(resolveWhisperCpp({ HOTCLIP_WHISPER_CPP_BIN: "/bin/whisper-cli", HOTCLIP_WHISPER_CPP_MODEL: " /m/ggml.bin " }, {}))
       .toEqual({ binary: "/bin/whisper-cli", model: "/m/ggml.bin", noGpu: false });
-    expect(resolveWhisperCpp({ HOTCLIP_WHISPER_CPP_BIN: "/b", HOTCLIP_WHISPER_CPP_MODEL: "/m", HOTCLIP_WHISPER_CPP_NO_GPU: "1" })?.noGpu)
+    expect(resolveWhisperCpp({ HOTCLIP_WHISPER_CPP_BIN: "/b", HOTCLIP_WHISPER_CPP_MODEL: "/m", HOTCLIP_WHISPER_CPP_NO_GPU: "1" }, {})?.noGpu)
       .toBe(true);
+  });
+
+  it("falls back to the paths saved from the settings screen", () => {
+    // Desktop users have no environment to set: the settings file is the entry.
+    expect(resolveWhisperCpp({}, { whisperCppBin: "/saved/whisper-cli.exe", whisperCppModel: "/saved/ggml.bin" }))
+      .toEqual({ binary: "/saved/whisper-cli.exe", model: "/saved/ggml.bin", noGpu: false });
+    // A half-configured pair stays unconfigured rather than guessing.
+    expect(resolveWhisperCpp({}, { whisperCppBin: "/saved/whisper-cli.exe" })).toBeNull();
+    // Environment still wins over the file.
+    expect(resolveWhisperCpp(
+      { HOTCLIP_WHISPER_CPP_BIN: "/env/bin", HOTCLIP_WHISPER_CPP_MODEL: "/env/model" },
+      { whisperCppBin: "/saved/bin", whisperCppModel: "/saved/model" }
+    )).toMatchObject({ binary: "/env/bin", model: "/env/model" });
   });
 
   it("is not ready without a wired-up binary and model", async () => {

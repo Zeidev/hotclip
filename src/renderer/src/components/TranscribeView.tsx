@@ -18,6 +18,7 @@ import {
   LuPencil,
   LuBookOpen,
   LuReplaceAll,
+  LuTriangleAlert,
   LuX,
 } from "react-icons/lu";
 import { useT } from "../i18n/store";
@@ -283,6 +284,12 @@ export function TranscribeView({
                       {"●".repeat(e.accuracy)}{"○".repeat(3 - e.accuracy)}
                     </span>}
                     <span className="chip rounded-md px-2 py-0.5">{t("badgeLangs", { langs: e.langs.join("/") })}</span>
+                    {e.experimental && !e.installed && (
+                      <span className="chip flex items-center gap-1 rounded-md px-2 py-0.5 text-amber-300/90">
+                        <LuTriangleAlert className="h-3 w-3" />
+                        {t("badgeNeedsSetup")}
+                      </span>
+                    )}
                     {e.kind === "local" && !e.experimental && (
                       <span className={`chip rounded-md px-2 py-0.5 ${e.installed ? "text-emerald-400" : ""}`}>
                         {e.installed ? t("badgeInstalled") : t("badgeDownload", { n: e.sizeMB ?? 0 })}
