@@ -20,6 +20,7 @@ import { colorOutputArgs, hdrToneMapFilter, type ColorRenderPlan } from "./color
 import { ffmpegAudioStreamSpecifier, ffmpegVideoStreamSpecifier } from "./probe";
 import { videoEncoderArgs, type VideoEncoder } from "./video-encoder";
 import { visualEnhanceFilter, type VisualEnhancePlan } from "./visual-enhance";
+import { pieceColorFilter, type PieceColorGrade } from "./color-match";
 
 /**
  * Social loudness target (EBU R128): -14 LUFS integrated, -1.5 dBTP true-peak
@@ -125,6 +126,11 @@ export interface CutOptions {
    * the graph is byte-for-byte what it was before.
    */
   punchIn?: { width: number; height: number; scale?: number };
+  /**
+   * Jump-cut only: per-piece colour correction against the first kept piece.
+   * One entry per segment (null = leave it alone). Empty/absent changes nothing.
+   */
+  pieceGrade?: Array<PieceColorGrade | null>;
   /** 容器元数据(如 AIGC 隐式标识);copy 模式同样写入。 */
   metadata?: Record<string, string>;
 }
@@ -388,6 +394,9 @@ export function buildJumpCutArgs(
     const a = Math.max(0, s.startSec - seek);
     const b = Math.max(a, s.endSec - seek);
     const visual = [`trim=start=${a.toFixed(3)}:end=${b.toFixed(3)}`, "setpts=PTS-STARTPTS"];
+    // Colour match before any geometry: eq operates on the source frame.
+    const grade = pieceColorFilter(options.pieceGrade?.[i]);
+    if (grade) visual.push(grade);
     if (punch) {
       if (i % 2 === 1) {
         // Odd pieces push in; even pieces only rescale to the same target, so

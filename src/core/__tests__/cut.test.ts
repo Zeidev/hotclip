@@ -163,6 +163,15 @@ describe("buildCutArgs", () => {
     expect(plain[plain.indexOf("-filter_complex") + 1]).not.toContain("scale=");
   });
 
+  it("jump-cut colour match applies one eq per graded piece", () => {
+    const args = buildJumpCutArgs("/i.mp4", "/o.mp4", 0, [{ startSec: 0, endSec: 2 }, { startSec: 3, endSec: 5 }], {
+      pieceGrade: [null, { brightness: -0.02, saturation: 1.05 }],
+    });
+    const graph = args[args.indexOf("-filter_complex") + 1];
+    expect(graph).toContain("eq=brightness=-0.020:saturation=1.050");
+    expect(graph.match(/eq=brightness=/g)).toHaveLength(1);
+  });
+
   it("keeps undefined and explicit SDR color plans on the legacy argument path", () => {
     const legacy = buildCutArgs("/i.mp4", "/o.mp4", 0, 5, { mode: "copy" });
     const sdr = buildCutArgs("/i.mp4", "/o.mp4", 0, 5, { mode: "copy", color: colorPlan("sdr") });

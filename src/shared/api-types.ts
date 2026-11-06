@@ -513,6 +513,12 @@ export interface ExportOptions {
    * splice reads as a re-take. Default on; set false for a flat cut.
    */
   punchIn?: boolean;
+  /**
+   * Jump-cut piece colour match: later pieces get a small brightness/saturation
+   * correction against the first kept piece. Default on; monochrome and already
+   * close pieces are untouched.
+   */
+  colorMatch?: boolean;
   /** 说话人标签:多说话人切片换人时字幕行首加彩色「A:」(开了多人对谈才有标注)。 */
   speakerLabels?: boolean;
   /** 模板受控微扰:按切片种子小幅抖动字幕几何,批量出片不共享模板指纹。 */

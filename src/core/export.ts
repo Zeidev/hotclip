@@ -12,6 +12,7 @@ import { resolveFfmpegPath } from "./binaries";
 
 const execFileAsync = promisify(execFile);
 import { cutClip, cutJumpClip, concatClips, type CutOptions } from "./cut";
+import { measurePieceColors, planPieceColorGrades } from "./color-match";
 import { planColdOpen, planFlashForward, FLASH_SKIP_NEAR_START_SEC } from "./coldopen";
 import { computeJumpCut, BREATH_PAD_SEC } from "./gaps";
 import { perturbLayout } from "../shared/perturb";
@@ -325,6 +326,11 @@ export interface ExportRenderOptions {
    * 传 false 回到完全平切的画面。
    */
   punchIn?: boolean;
+  /**
+   * 跳剪片间配色:后几段按第一段的亮度/饱和度做小幅校正,避免不同时段的光
+   * 差读成闪白。默认开;片间本来接近或黑白素材不会动。
+   */
+  colorMatch?: boolean;
   /** 说话人标签:多说话人切片换人时字幕行首加彩色「A:」(词表带标注才生效)。 */
   speakerLabels?: boolean;
   /** 模板受控微扰:按切片种子小幅抖动字幕几何(字号/基线),批量出片不共享模板指纹。 */
@@ -1013,6 +1019,7 @@ export async function exportClips(
               crf: options.crf,
               encoder: videoEncoder,
               punchIn,
+              colorMatch: options.colorMatch !== false,
               audiogram: audioOnly ? audiogramSpec(Boolean(options.vertical), options.brand?.highlightColor) : undefined,
             },
           })
@@ -1058,7 +1065,13 @@ export async function exportClips(
             onTimeSec
           );
         } else if (baseSegments.length > 1) {
-          await cutJumpClip(inputPath, cutTarget, clip.startSec, baseSegments, { ...cutOptions, punchIn }, signal, onTimeSec);
+          // Colour match is measured per piece (2 samples/s, cheap) and applied
+          // only where the pieces are visibly apart; failures leave the piece
+          // untouched.
+          const pieceGrade = options.colorMatch !== false && !audioOnly
+            ? planPieceColorGrades(await measurePieceColors(inputPath, baseSegments, signal))
+            : undefined;
+          await cutJumpClip(inputPath, cutTarget, clip.startSec, baseSegments, { ...cutOptions, punchIn, pieceGrade }, signal, onTimeSec);
         } else {
           // Single kept segment: copy H.264 video only when its start is proven
           // keyframe-aligned and no pixel-changing filter is active.
