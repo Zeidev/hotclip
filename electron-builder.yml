@@ -1,0 +1,45 @@
+appId: com.hotclip.app
+productName: HotClip
+directories:
+  buildResources: build
+files:
+  - out/**/*
+  - "!**/*.map"
+# ffmpeg/ffprobe/sherpa/onnxruntime native addons must run from the real filesystem, not inside asar
+asarUnpack:
+  - "**/node_modules/ffmpeg-static/**"
+  - "**/node_modules/@ffprobe-installer/**"
+  - "**/node_modules/sherpa-onnx-*/**"
+  - "**/node_modules/onnxruntime-node/**"
+# bundled caption font (OFL) — libass reads it via the subtitles filter's fontsdir
+extraResources:
+  - from: tools/qwen-speech-server.py
+    to: speech/qwen-speech-server.py
+  - from: resources/fonts
+    to: fonts
+  # web-caption overlay templates (rendered by the offscreen BrowserWindow)
+  - from: resources/caption-templates
+    to: caption-templates
+win:
+  target:
+    - nsis
+    - zip # 绿色版 portable zip for Chinese users
+  artifactName: HotClip-${version}-win-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+mac:
+  identity: "-"
+  hardenedRuntime: false
+  notarize: false
+  target:
+    - dmg
+  artifactName: HotClip-${version}-mac-${arch}.${ext}
+  category: public.app-category.video
+linux:
+  target:
+    - AppImage
+  artifactName: HotClip-${version}-linux-${arch}.${ext}
+  category: Video
+npmRebuild: false

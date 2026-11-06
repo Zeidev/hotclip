@@ -1,0 +1,189 @@
+name: Release
+
+# Tag push (v*) → build installers on native runners, then stage and publish
+# from ONE job. (Two electron-builder jobs publishing to the same release race
+# and overwrite each other's assets — bit us on v0.1.0 and v0.2.0.)
+# Native runners matter: sherpa-onnx-node / ffmpeg-static install
+# platform-specific binaries at install time.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest # arm64 dmg
+            args: --mac dmg --arm64
+          - os: windows-latest # nsis installer + portable zip
+            args: --win
+          - os: ubuntu-latest # experimental AppImage (issue #7)
+            args: --linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build bundles
+        run: pnpm build
+
+      - name: Package installers
+        run: pnpm exec electron-builder ${{ matrix.args }} --publish never
+        env:
+          # Keep certificate discovery off; mac.identity explicitly selects ad-hoc signing.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Verify macOS app signature
+        if: runner.os == 'macOS'
+        run: bash tools/verify-macos-app.sh dist/mac-arm64/HotClip.app
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            dist/*.dmg
+            dist/*.exe
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.blockmap
+            dist/latest*.yml
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: installers-*
+          path: assets
+          merge-multiple: true
+
+      - name: Validate release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$GITHUB_REF_NAME" != "v$package_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version v$package_version" >&2
+            exit 1
+          fi
+
+          required_patterns=(
+            "assets/*.dmg"
+            "assets/*.dmg.blockmap"
+            "assets/*.exe"
+            "assets/*.exe.blockmap"
+            "assets/*.zip"
+            "assets/*.AppImage"
+            "assets/latest.yml"
+            "assets/latest-mac.yml"
+            "assets/latest-linux.yml"
+          )
+
+          for pattern in "${required_patterns[@]}"; do
+            if ! compgen -G "$pattern" > /dev/null; then
+              echo "Missing required release asset: $pattern" >&2
+              exit 1
+            fi
+          done
+
+      - name: Stage assets and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          notes_file="docs/releases/$tag.md"
+          asset_files=(assets/*)
+
+          if release_state="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "$release_state" == "true" ]]; then
+              echo "Resuming existing draft release $tag"
+            else
+              echo "Release $tag is already public; verifying it without replacing assets"
+              exit 0
+            fi
+          else
+            create_args=(
+              --repo "$GITHUB_REPOSITORY"
+              --draft
+              --verify-tag
+              --title "$tag"
+            )
+            if [[ -f "$notes_file" ]]; then
+              create_args+=(--notes-file "$notes_file")
+            else
+              create_args+=(--generate-notes)
+            fi
+            gh release create "$tag" "${create_args[@]}"
+          fi
+
+          gh release upload "$tag" "${asset_files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
+          publish_args=(
+            --repo "$GITHUB_REPOSITORY"
+            --draft=false
+            --prerelease=false
+            --latest
+            --title "$tag"
+          )
+          if [[ -f "$notes_file" ]]; then
+            publish_args+=(--notes-file "$notes_file")
+          fi
+          gh release edit "$tag" "${publish_args[@]}"
+
+      - name: Verify public release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          release_state="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '.isDraft, .isPrerelease')"
+          if [[ "$release_state" != $'false\nfalse' ]]; then
+            echo "Release $tag is not a public stable release: $release_state" >&2
+            exit 1
+          fi
+
+          remote_assets="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for asset in assets/*; do
+            expected="$(basename "$asset")"
+            if ! grep -Fxq -- "$expected" <<< "$remote_assets"; then
+              echo "Release $tag is missing uploaded asset: $expected" >&2
+              exit 1
+            fi
+          done
+
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url

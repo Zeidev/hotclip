@@ -1,0 +1,198 @@
+/**
+ * 预览区:源画面 16:9 + 竖屏 9:16 中心裁切预览(海报同款发光描边卡)。
+ * 视频工具终于能看到视频了——点候选/点时间轴都会把画面 seek 过去。
+ * 竖屏卡是第二个 <video> 元素做 CSS 中心裁切,与主画面粗同步
+ * (人脸跟随的真实取景在导出层,这里是"竖屏大概长这样"的直觉预览)。
+ */
+import { useEffect, useRef, useState } from "react";
+import { LuPlay, LuPause, LuSkipBack, LuSkipForward } from "react-icons/lu";
+import { getApi } from "../../api/provider";
+import { useT } from "../../i18n/store";
+
+export interface PreviewTransportCommand {
+  id: number;
+  action: "toggle" | "back5" | "forward5" | "audition";
+  startSec?: number;
+  endSec?: number;
+}
+
+function formatClock(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+export function PreviewPane({
+  filePath,
+  durationSec,
+  seekSec,
+  onTime,
+  onPrevCandidate,
+  onNextCandidate,
+  transportCommand,
+  compact = false,
+}: {
+  filePath: string | null;
+  durationSec: number;
+  /** 外部请求跳播的时刻(时间轴/候选点击驱动;NaN = 无请求)。 */
+  seekSec: number;
+  onTime: (sec: number) => void;
+  onPrevCandidate: () => void;
+  onNextCandidate: () => void;
+  transportCommand?: PreviewTransportCommand | null;
+  compact?: boolean;
+}): React.JSX.Element {
+  const t = useT("workbench");
+  const mainRef = useRef<HTMLVideoElement>(null);
+  const auditionEnd = useRef<number | null>(null);
+  const cropRef = useRef<HTMLVideoElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [now, setNow] = useState(0);
+  // [FIX] 区分标识必须编进 pathname,不能放 query。
+  // 之前写作 `${srcBase}?view=main` / `${srcBase}?view=crop`,但 Chromium 判定
+  // "是否同一媒体资源"时忽略 query,且主进程 serveMedia 只取 pathname —— 两个
+  // <video> 实际仍是同一资源,共享同一 media buffer,一路坏两路一起坏,
+  // 且该 URL 本会话内不再可播。现在 view 走 pathname 第 2 段。
+  const src = filePath ? getApi().mediaUrl(filePath, "main") : "";
+  const cropSrc = filePath ? getApi().mediaUrl(filePath, "crop") : "";
+  // [FIX] 主画面读流失败时把 MediaError.code 记下来,占位文案如实说明是"读取中断"
+  // 而不是笼统的"此环境无法预览"——后者会让用户以为是环境/格式不支持。
+  // 2 = MEDIA_ERR_NETWORK(流读取中断,协议层),4 = MEDIA_ERR_SRC_NOT_SUPPORTED。
+  const [mainErrCode, setMainErrCode] = useState(0);
+
+  // 外部 seek 请求(时间轴点击/候选聚焦)
+  useEffect(() => {
+    const v = mainRef.current;
+    if (!v || !Number.isFinite(seekSec)) return;
+    auditionEnd.current = null;
+    v.currentTime = seekSec;
+  }, [seekSec]);
+
+  // 竖屏裁切卡与主画面粗同步:漂移超过 0.3s 才校,别抖
+  const syncCrop = (): void => {
+    const m = mainRef.current;
+    const c = cropRef.current;
+    if (!m || !c) return;
+    if (Math.abs(c.currentTime - m.currentTime) > 0.3) c.currentTime = m.currentTime;
+    if (m.paused !== c.paused) {
+      if (m.paused) c.pause();
+      else void c.play().catch(() => {});
+    }
+  };
+
+  const togglePlay = (): void => {
+    const v = mainRef.current;
+    if (!v) return;
+    auditionEnd.current = null;
+    if (v.paused) void v.play().catch(() => {});
+    else v.pause();
+  };
+
+  useEffect(() => {
+    const video = mainRef.current;
+    if (!video || !transportCommand) return;
+    auditionEnd.current = null;
+    if (transportCommand.action === "audition" && Number.isFinite(transportCommand.startSec) && Number.isFinite(transportCommand.endSec)) {
+      video.currentTime = Math.max(0, transportCommand.startSec!);
+      auditionEnd.current = Math.min(durationSec, transportCommand.endSec!);
+      void video.play().catch(() => { auditionEnd.current = null; });
+      return;
+    }
+    if (transportCommand.action === "toggle") {
+      if (video.paused) void video.play().catch(() => {});
+      else video.pause();
+      return;
+    }
+    const delta = transportCommand.action === "back5" ? -5 : 5;
+    video.currentTime = Math.max(0, Math.min(durationSec, video.currentTime + delta));
+  }, [durationSec, transportCommand]);
+
+  return (
+    <div className="flex shrink-0 flex-col gap-2">
+      <div className={`flex gap-2.5 ${compact ? "h-[132px]" : "h-[236px]"}`}>
+        {/* 源画面 */}
+        <div className="relative min-w-0 flex-1 overflow-hidden rounded-xl border border-line/60 bg-black">
+          {/* [FIX] 读流失败时不能只是把 <video> 留在原地(它已经黑屏且不会自愈),
+              要显式换成占位块,并报出 MediaError.code。 */}
+          {src && mainErrCode === 0 ? (
+            <video
+              ref={mainRef}
+              src={src}
+              className="h-full w-full object-contain"
+              onClick={togglePlay}
+              onPlay={() => {
+                setPlaying(true);
+                syncCrop();
+              }}
+              onPause={() => {
+                setPlaying(false);
+                syncCrop();
+              }}
+              onTimeUpdate={(e) => {
+                const sec = (e.target as HTMLVideoElement).currentTime;
+                if (auditionEnd.current !== null && sec >= auditionEnd.current) { mainRef.current?.pause(); auditionEnd.current = null; }
+                setNow(sec);
+                onTime(sec);
+                syncCrop();
+              }}
+              onCanPlay={() => setMainErrCode(0)}
+              onError={(e) => {
+                setPlaying(false);
+                setMainErrCode(e.currentTarget.error?.code ?? 0);
+              }}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center px-6 text-center text-[12px] text-mut">
+              {mainErrCode > 0 ? t("previewReadFailed").replace("{code}", String(mainErrCode)) : t("noPreview")}
+            </div>
+          )}
+          <span className="pointer-events-none absolute top-2 left-2 rounded-md bg-black/55 px-2 py-0.5 text-[10px] text-fg/70">
+            {t("sourcePreview")}
+          </span>
+        </div>
+        {/* 竖屏 9:16 中心裁切:发光描边(主视觉海报的切片卡语言) */}
+        <div className="relative w-[133px] shrink-0 overflow-hidden rounded-xl border-[1.5px] border-ember/60 bg-black shadow-[0_0_22px_-6px_rgba(255,100,40,0.5)]">
+          {src ? (
+            <video ref={cropRef} src={cropSrc} muted className="h-full w-full object-cover" />
+          ) : (
+            <div className="h-full bg-gradient-to-b from-panel-2 to-panel" />
+          )}
+          <span className="pointer-events-none absolute right-0 bottom-1.5 left-0 text-center text-[9px] text-fg/50">
+            {t("verticalPreview")}
+          </span>
+        </div>
+      </div>
+      {/* 走带 */}
+      <div className="flex items-center gap-2.5">
+        <button
+          type="button"
+          onClick={onPrevCandidate}
+          className="flex h-7 w-7 items-center justify-center rounded-lg border border-line text-mut transition-colors hover:border-mut hover:text-fg"
+        >
+          <LuSkipBack className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={togglePlay}
+          disabled={!src}
+          className="flame-gradient flex h-8 w-8 items-center justify-center rounded-lg text-white disabled:opacity-40"
+        >
+          {playing ? <LuPause className="h-4 w-4" /> : <LuPlay className="h-4 w-4" />}
+        </button>
+        <button
+          type="button"
+          onClick={onNextCandidate}
+          className="flex h-7 w-7 items-center justify-center rounded-lg border border-line text-mut transition-colors hover:border-mut hover:text-fg"
+        >
+          <LuSkipForward className="h-3.5 w-3.5" />
+        </button>
+        <span className="font-mono text-[12px] tabular-nums">
+          {formatClock(now)} <span className="text-mut/50">/ {formatClock(durationSec)}</span>
+        </span>
+      </div>
+    </div>
+  );
+}

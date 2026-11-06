@@ -1,0 +1,329 @@
+/**
+ * 录播监听控制面板:两种触发方式,事件流共用。
+ *  - 盯文件夹:轮询目录,新录播写完落稳后自动切片(对接任何会往盘上写文件的工具);
+ *  - webhook:录播姬/blrec 下播回调直接推过来,更实时、不用猜文件写没写完。
+ * 触发后都走同一条全托管管线(转写→找爆点→出片),7×24 无人值守。
+ */
+import { useCallback, useEffect, useRef, useState } from "react";
+import { LuFolderSearch, LuX, LuPlay, LuSquare, LuCircleCheck, LuCircleAlert, LuLoaderCircle, LuCopy, LuCheck, LuRotateCcw, LuTrash2 } from "react-icons/lu";
+import { useT, useLocaleStore } from "../i18n/store";
+import { getApi, isElectron } from "../api/provider";
+import { useLlmStore, isLlmReady } from "../stores/llm-store";
+import { useRenderPrefs } from "../stores/render-prefs-store";
+import type { AutomationTask, WatchEvent } from "../../../shared/api-types";
+import { ModalShell } from "./ui";
+import { DetectionLimits } from "./DetectionLimits";
+import { GENRE_PRESETS, GENRE_CUSTOM_MAX_CHARS, normalizeGenreId } from "../../../core/genre";
+import { detectionOptionsFromPrefs } from "../../../shared/detection-options";
+import { useSession } from "../stores/session-store";
+
+function fmtTime(at: number): string {
+  const d = new Date(at);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+}
+
+export function WatchFolderModal({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const t = useT("watch");
+  const tw = useT("workbench");
+  const th = useT("highlights");
+  const { locale } = useLocaleStore();
+  const { prefs, setPref } = useRenderPrefs();
+  const changeSelection = (value: Parameters<typeof setPref>[0]): void => {
+    setPref(value);
+    useSession.getState().markParamsDirty(true);
+  };
+  const { config } = useLlmStore();
+  const llmOk = !isElectron() || isLlmReady(config);
+  const [dir, setDir] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [events, setEvents] = useState<WatchEvent[]>([]);
+  const [tasks, setTasks] = useState<AutomationTask[]>([]);
+  const [activityView, setActivityView] = useState<"tasks" | "events">("tasks");
+  const [mode, setMode] = useState<"folder" | "webhook">("folder");
+  const [port, setPort] = useState("17650");
+  const [token, setToken] = useState("");
+  const [copied, setCopied] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const refreshTasks = useCallback(async (): Promise<void> => {
+    setTasks(await getApi().automationTasksGet());
+  }, []);
+
+  useEffect(() => {
+    const api = getApi();
+    void api.watchStatus().then((s) => {
+      if (s.running) {
+        setRunning(true);
+        setMode("folder");
+      }
+      if (s.dir) setDir(s.dir);
+    });
+    void api.webhookStatus().then((s) => {
+      if (s.running) {
+        setRunning(true);
+        setMode("webhook");
+        if (s.port) setPort(String(s.port));
+        if (s.dir) setDir(s.dir);
+      }
+    });
+    void refreshTasks();
+    return api.onWatchEvent((e) => {
+      setEvents((prev) => [...prev.slice(-199), e]);
+      void refreshTasks();
+    });
+  }, [refreshTasks]);
+
+  /** 给录播姬/blrec 填的回调地址。 */
+  const hookUrl = `http://127.0.0.1:${port.trim() || "17650"}/${token.trim() ? `?token=${encodeURIComponent(token.trim())}` : ""}`;
+
+  // 新事件进来自动滚到底
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+  }, [events]);
+
+  const pickDir = async (): Promise<void> => {
+    const picked = await getApi().selectDir();
+    if (picked) setDir(picked);
+  };
+
+  const toggle = async (): Promise<void> => {
+    const api = getApi();
+    if (running) {
+      await (mode === "webhook" ? api.webhookStop() : api.watchStop());
+      setRunning(false);
+      return;
+    }
+    if (!dir) return;
+    // 用户自选过导出位置的话,无人值守的成片也落那儿(与向导出片一处设置)
+    const prefs = useRenderPrefs.getState().prefs;
+    const outDir = prefs.outDir || undefined;
+    const selection = detectionOptionsFromPrefs(prefs);
+    if (mode === "webhook") {
+      const started = await api.webhookStart(dir, config, outDir, Number(port) || 17650, token.trim() || undefined, selection);
+      setPort(String(started.port));
+    } else {
+      await api.watchStart(dir, config, outDir, selection);
+    }
+    setRunning(true);
+  };
+
+  const copyUrl = (): void => {
+    void navigator.clipboard.writeText(hookUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  const retryTask = async (id: string): Promise<void> => {
+    const outDir = useRenderPrefs.getState().prefs.outDir || undefined;
+    await getApi().automationTaskRetry(id, config, outDir);
+    await refreshTasks();
+  };
+
+  const cancelTask = async (id: string): Promise<void> => {
+    await getApi().automationTaskCancel(id);
+    await refreshTasks();
+  };
+
+  const clearTasks = async (): Promise<void> => {
+    await getApi().automationTasksClear();
+    await refreshTasks();
+  };
+
+  const EVENT_META: Record<WatchEvent["type"], { label: string; cls: string; spin?: boolean }> = {
+    found: { label: t("evFound"), cls: "text-sky-400" },
+    transcribing: { label: t("evTranscribing"), cls: "text-amber-300", spin: true },
+    detecting: { label: t("evDetecting"), cls: "text-amber-300", spin: true },
+    exporting: { label: t("evExporting"), cls: "text-amber-300", spin: true },
+    done: { label: t("evDone"), cls: "text-emerald-400" },
+    error: { label: t("evError"), cls: "text-red-400" },
+  };
+
+  return (
+    <ModalShell onClose={onClose}>
+      <section
+        className="card max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl p-6"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={t("title")}
+      >
+        <div className="flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-lg font-extrabold">
+            <LuFolderSearch className="h-5 w-5 text-ember" />
+            {t("title")}
+            {running && <span className="ml-1 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />}
+          </h2>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-mut transition-colors hover:text-fg" aria-label="close">
+            <LuX className="h-4.5 w-4.5" />
+          </button>
+        </div>
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-mut">{t("desc")}</p>
+
+        {/* 触发方式:盯文件夹(通用) / webhook(录播姬·blrec,更实时) */}
+        <div className="mt-3.5 flex gap-1.5 rounded-lg border border-line bg-panel-2 p-1">
+          {(["folder", "webhook"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              disabled={running}
+              onClick={() => setMode(m)}
+              className={`flex-1 rounded-md px-3 py-1.5 text-[12.5px] font-semibold transition-colors disabled:opacity-50 ${
+                mode === m ? "bg-ember/15 text-ember" : "text-mut hover:text-fg"
+              }`}
+            >
+              {t(m === "folder" ? "modeFolder" : "modeWebhook")}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1.5 text-[11.5px] leading-relaxed text-mut">
+          {t(mode === "folder" ? "modeFolderHint" : "modeWebhookHint")}
+        </p>
+
+        <div className="mt-4 flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={pickDir}
+            disabled={running}
+            className="min-w-0 flex-1 truncate rounded-lg border border-line bg-panel-2 px-3 py-2 text-left text-[13px] text-mut transition-colors hover:border-mut hover:text-fg disabled:opacity-50"
+          >
+            {dir ?? t("pickDir")}
+          </button>
+          <button
+            type="button"
+            disabled={!dir || !llmOk}
+            onClick={() => void toggle()}
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-4 py-2 text-[13px] font-bold text-white disabled:opacity-40 ${
+              running ? "bg-red-500/80 hover:bg-red-500" : "btn-flame"
+            }`}
+          >
+            {running ? <LuSquare className="h-3.5 w-3.5" /> : <LuPlay className="h-3.5 w-3.5" />}
+            {running ? t("stop") : t("start")}
+          </button>
+        </div>
+        {!llmOk && <p className="mt-2 text-[11.5px] text-red-400">{t("needLlm")}</p>}
+
+        <div className="mt-3 space-y-2 rounded-xl border border-line p-3">
+          <label className="flex items-center justify-between gap-2 text-[12px]">
+            <span className="text-mut">{tw("paramGenre")}</span>
+            <select aria-label={tw("paramGenre")} disabled={running} value={normalizeGenreId(prefs.genreId)}
+              onChange={(e) => changeSelection({ genreId: e.target.value })}
+              className="min-w-0 rounded-lg border border-line bg-panel-2 px-2 py-1.5 disabled:opacity-50">
+              {GENRE_PRESETS.map((g) => <option key={g.id} value={g.id}>{locale === "zh" ? g.labelZh : g.labelEn}</option>)}
+            </select>
+          </label>
+          {(prefs.genreId === "custom" || prefs.genreCustom.trim()) && <textarea
+            aria-label={th("genreCustomHint")} placeholder={th("genrePlaceholder")} disabled={running}
+            maxLength={GENRE_CUSTOM_MAX_CHARS} value={prefs.genreCustom}
+            onChange={(e) => changeSelection({ genreCustom: e.target.value })}
+            className="w-full rounded-lg border border-line bg-panel-2 p-2 text-[12px] disabled:opacity-50" />}
+          <DetectionLimits clipLength={prefs.clipLength} maxClips={prefs.maxClips} disabled={running} onChange={changeSelection} />
+          <p className="text-[10.5px] leading-relaxed text-mut">{tw("watchSelectionHint")}</p>
+        </div>
+
+        {mode === "webhook" && (
+          <div className="mt-3 space-y-2.5 rounded-xl border border-line bg-panel-2 p-3">
+            <div className="flex items-center gap-2.5">
+              <label className="w-24 shrink-0 text-[12px] text-mut" htmlFor="hook-port">
+                {t("hookPort")}
+              </label>
+              <input
+                id="hook-port"
+                value={port}
+                disabled={running}
+                onChange={(e) => setPort(e.target.value.replace(/\D/g, "").slice(0, 5))}
+                className="w-24 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-[12.5px] disabled:opacity-50"
+              />
+              <label className="w-16 shrink-0 text-right text-[12px] text-mut" htmlFor="hook-token">
+                {t("hookToken")}
+              </label>
+              <input
+                id="hook-token"
+                value={token}
+                disabled={running}
+                placeholder={t("hookTokenPlaceholder")}
+                onChange={(e) => setToken(e.target.value.slice(0, 64))}
+                className="min-w-0 flex-1 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-[12.5px] disabled:opacity-50"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-24 shrink-0 text-[12px] text-mut">{t("hookUrl")}</span>
+              <code className="min-w-0 flex-1 truncate rounded-lg bg-panel px-2.5 py-1.5 font-mono text-[11.5px] text-fg/90">
+                {hookUrl}
+              </code>
+              <button
+                type="button"
+                onClick={copyUrl}
+                className="shrink-0 rounded-lg border border-line p-1.5 text-mut transition-colors hover:border-mut hover:text-fg"
+                aria-label={t("hookCopy")}
+              >
+                {copied ? <LuCheck className="h-3.5 w-3.5 text-emerald-400" /> : <LuCopy className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+            <p className="text-[11px] leading-relaxed text-mut">{t("hookHelp")}</p>
+          </div>
+        )}
+
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <div className="flex gap-1 rounded-lg border border-line bg-panel-2 p-1" role="tablist" aria-label={t("activityTitle")}>
+            {(["tasks", "events"] as const).map((view) => (
+              <button key={view} type="button" role="tab" aria-selected={activityView === view} onClick={() => setActivityView(view)} className={`rounded-md px-3 py-1 text-[11.5px] font-semibold ${activityView === view ? "bg-ember/15 text-ember" : "text-mut hover:text-fg"}`}>
+                {t(view === "tasks" ? "taskHistory" : "liveEvents")}
+              </button>
+            ))}
+          </div>
+          {activityView === "tasks" && tasks.some((task) => !["queued", "running"].includes(task.status)) && (
+            <button type="button" onClick={() => void clearTasks()} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-mut hover:text-fg">
+              <LuTrash2 aria-hidden="true" className="h-3.5 w-3.5" />{t("clearHistory")}
+            </button>
+          )}
+        </div>
+
+        {activityView === "tasks" ? (
+          <div className="mt-2 h-56 overflow-y-auto rounded-xl border border-line bg-panel-2 p-3" aria-live="polite">
+            {tasks.length === 0 ? <p className="mt-20 text-center text-[12px] text-mut">{t("taskEmpty")}</p> : (
+              <ul className="space-y-2">
+                {tasks.map((task) => {
+                  const active = task.status === "queued" || task.status === "running";
+                  const retryable = ["failed", "cancelled", "interrupted"].includes(task.status);
+                  return (
+                    <li key={task.id} className="rounded-lg border border-line/70 bg-panel px-3 py-2.5 text-[12px]">
+                      <div className="flex items-start gap-2.5">
+                        {active ? <LuLoaderCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-300" /> : task.status === "completed" ? <LuCircleCheck aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" /> : <LuCircleAlert aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate font-semibold text-fg" title={task.sourcePath}>{task.sourceName}</span>
+                            <span className="shrink-0 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-mut">{t(`task_${task.status}`)}</span>
+                            {task.attempts > 1 && <span className="shrink-0 text-[10px] text-mut">{t("attempts", { n: task.attempts })}</span>}
+                          </div>
+                          <p className="mt-1 truncate text-[11px] text-mut" title={task.error}>{task.status === "completed" ? t("doneClips", { n: task.clips ?? 0 }) : task.status === "interrupted" ? t("interruptedHint") : task.error ?? t(`stage_${task.stage}`)}</p>
+                        </div>
+                        {active && <button type="button" onClick={() => void cancelTask(task.id)} className="rounded-md border border-line px-2 py-1 text-[10.5px] text-mut hover:border-red-400/40 hover:text-red-300">{t("cancelTask")}</button>}
+                        {retryable && <button type="button" disabled={!llmOk} onClick={() => void retryTask(task.id)} className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-[10.5px] text-mut hover:border-ember/40 hover:text-ember disabled:opacity-40"><LuRotateCcw aria-hidden="true" className="h-3 w-3" />{t("retryTask")}</button>}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        ) : (
+          <div ref={listRef} className="mt-2 h-56 overflow-y-auto rounded-xl border border-line bg-panel-2 p-3">
+            {events.length === 0 ? <p className="mt-20 text-center text-[12px] text-mut">{running ? t("waiting") : t("empty")}</p> : (
+              <ul className="space-y-1.5">
+                {events.map((e, i) => {
+                  const meta = EVENT_META[e.type];
+                  return <li key={`${e.path}-${e.type}-${i}`} className="flex items-start gap-2 text-[12px]">
+                    <span className="shrink-0 font-mono text-[11px] text-mut">{fmtTime(e.at)}</span>
+                    <span className={`font-semibold ${meta.cls}`}>{meta.label}</span>
+                    <span className="min-w-0 break-all text-fg/90">{e.file}{e.type === "done" ? ` · ${t("doneClips", { n: e.clips ?? 0 })}` : ""}{e.type === "error" && e.message ? ` · ${e.message}` : ""}</span>
+                  </li>;
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+        <p className="mt-2.5 text-[11px] leading-relaxed text-mut">{t("note")}</p>
+      </section>
+    </ModalShell>
+  );
+}

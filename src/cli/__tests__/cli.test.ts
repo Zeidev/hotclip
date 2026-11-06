@@ -1,0 +1,143 @@
+import { describe, it, expect } from "vitest";
+import { parseCliArgs } from "../index";
+import { GENRE_PRESETS, GENRE_CUSTOM_MAX_CHARS } from "../../core/genre";
+
+describe("unattended selection controls", () => {
+  it("accepts every preset on both detection commands and keeps default inputs unchanged", () => {
+    for (const command of ["clip", "highlights"]) {
+      expect(parseCliArgs([command, "source.mp4"]).genre).toBeUndefined();
+      for (const genre of GENRE_PRESETS) {
+        expect(parseCliArgs([command, "--genre", genre.id, "source.mp4"]).genre?.id).toBe(genre.id);
+      }
+    }
+  });
+
+  it("validates genres, missing values and unsupported commands before processing", () => {
+    for (const tail of [[], ["--json"], ["typo"]]) {
+      expect(() => parseCliArgs(["clip", "source.mp4", "--genre", ...tail])).toThrow(/auto.*shopping.*game/);
+    }
+    expect(() => parseCliArgs(["clip", "source.mp4", "--genre-custom", "--json"])).toThrow(/文本/);
+    expect(() => parseCliArgs(["transcribe", "source.mp4", "--genre", "game"])).toThrow(/仅用于/);
+  });
+
+  it("keeps custom criteria independent of option order and bounds their length", () => {
+    for (const flags of [["--genre", "game", "--genre-custom", " 只选翻盘 "], ["--genre-custom", " 只选翻盘 ", "--genre", "game"]]) {
+      expect(parseCliArgs(["clip", "source.mp4", ...flags]).genre).toEqual({ id: "game", custom: "只选翻盘" });
+    }
+    expect(parseCliArgs(["clip", "source.mp4", "--genre-custom", " "]).genre).toEqual({ id: "auto", custom: undefined });
+    expect(parseCliArgs(["clip", "source.mp4", "--genre-custom", "字".repeat(2000)]).genre?.custom).toHaveLength(GENRE_CUSTOM_MAX_CHARS);
+  });
+
+  it("accepts the 1–2 minute preset with ten clips and rejects invalid lengths", () => {
+    expect(parseCliArgs(["clip", "source.mp4", "--clip-length", "extended", "--max-clips", "10"]))
+      .toMatchObject({ clipLength: "extended", maxClips: 10 });
+    for (const value of ["", "120", "--json", "toString"]) {
+      expect(() => parseCliArgs(["highlights", "source.mp4", "--clip-length", value])).toThrow(/short.*extended/);
+    }
+  });
+});
+
+describe("parseCliArgs (CLI 参数解析)", () => {
+  it("accepts an explicit subtitle track for all transcript-consuming commands", () => {
+    for (const command of ["transcribe", "highlights", "clip"]) {
+      expect(parseCliArgs([command, "--subtitles", "/v/原文.srt", "/v/source.mp4", "--json"]))
+        .toMatchObject({ videoPath: "/v/source.mp4", subtitlePath: "/v/原文.srt", json: true });
+    }
+    expect(() => parseCliArgs(["clip", "/v/source.mp4", "--subtitles"])).toThrow(/SRT/);
+    expect(() => parseCliArgs(["clip", "/v/source.mp4", "--subtitles", "--json"])).toThrow(/SRT/);
+    expect(() => parseCliArgs(["doctor", "--subtitles", "/v/原文.srt"])).toThrow(/仅用于/);
+  });
+  it("clip 全默认:竖屏+字幕开,视频路径为首个非选项参数", () => {
+    const a = parseCliArgs(["clip", "/v/直播回放.mp4"]);
+    expect(a).toMatchObject({
+      command: "clip",
+      videoPath: "/v/直播回放.mp4",
+      vertical: true,
+      captions: true,
+      autoEnhance: false,
+      json: false,
+    });
+  });
+
+  it("--auto-enhance is explicit and defaults off", () => {
+    expect(parseCliArgs(["clip", "/v/a.mp4"]).autoEnhance).toBe(false);
+    expect(parseCliArgs(["clip", "/v/a.mp4", "--auto-enhance"]).autoEnhance).toBe(true);
+    expect(parseCliArgs(["clip", "/v/a.mp4", "--denoise"]).denoiseMode).toBe("basic");
+    expect(parseCliArgs(["clip", "/v/a.mp4", "--smart-denoise"]).denoiseMode).toBe("smart");
+  });
+
+  it("开关与带值选项:--no-vertical / --no-captions / --max-clips / --out / --json", () => {
+    const a = parseCliArgs(["clip", "/v/a.mp4", "--no-vertical", "--no-captions", "--max-clips", "3", "--out", "/tmp/o", "--json"]);
+    expect(a.vertical).toBe(false);
+    expect(a.captions).toBe(false);
+    expect(a.maxClips).toBe(3);
+    expect(a.outDir).toBe("/tmp/o");
+    expect(a.json).toBe(true);
+  });
+
+  it("--max-clips 钳到 1..12(与 MCP 同一约束)", () => {
+    expect(parseCliArgs(["clip", "/v/a.mp4", "--max-clips", "99"]).maxClips).toBe(12);
+    expect(parseCliArgs(["clip", "/v/a.mp4", "--max-clips", "0"]).maxClips).toBe(1);
+  });
+
+  it("选项顺序无关:选项可在路径之前", () => {
+    const a = parseCliArgs(["highlights", "--max-clips", "5", "/v/a.mp4"]);
+    expect(a.videoPath).toBe("/v/a.mp4");
+    expect(a.maxClips).toBe(5);
+  });
+
+  it("--reference 带值解析;缺值抛错", () => {
+    const a = parseCliArgs(["highlights", "/v/a.mp4", "--reference", "/v/对标爆款.mp4"]);
+    expect(a.referencePath).toBe("/v/对标爆款.mp4");
+    expect(parseCliArgs(["clip", "/v/a.mp4"]).referencePath).toBeUndefined();
+    expect(() => parseCliArgs(["clip", "/v/a.mp4", "--reference"])).toThrow(/对标视频路径/);
+  });
+
+  it("doctor 不需要视频路径,--download 可选", () => {
+    expect(parseCliArgs(["doctor"])).toMatchObject({ command: "doctor", download: false });
+    expect(parseCliArgs(["doctor", "--download"]).download).toBe(true);
+  });
+
+  it("发布表现反馈:import 需要文件,report 不需要路径", () => {
+    expect(parseCliArgs(["feedback", "/data/bilibili.csv"])).toMatchObject({
+      command: "feedback",
+      videoPath: "/data/bilibili.csv",
+    });
+    expect(parseCliArgs(["feedback-report", "--json"])).toMatchObject({
+      command: "feedback-report",
+      videoPath: "",
+      json: true,
+    });
+    expect(() => parseCliArgs(["feedback"])).toThrow(/数据文件路径/);
+  });
+
+  it("缺命令/缺路径/未知选项/非法数值 → 抛出含用法的错误", () => {
+    expect(() => parseCliArgs([])).toThrow(/用法/);
+    expect(() => parseCliArgs(["clip"])).toThrow(/缺少视频路径/);
+    expect(() => parseCliArgs(["clip", "/v/a.mp4", "--wat"])).toThrow(/未知选项/);
+    expect(() => parseCliArgs(["clip", "/v/a.mp4", "--max-clips", "abc"])).toThrow(/数字/);
+  });
+
+  it("-h / --help → 输出用法", () => {
+    expect(() => parseCliArgs(["--help"])).toThrow(/pnpm cli clip/);
+  });
+});
+
+
+describe("local speech engine options", () => {
+  it("parses the optional service and explicit restart", () => {
+    expect(parseCliArgs(["transcribe", "source.mp4", "--engine", "qwen3", "--asr-url", "http://127.0.0.1:8766", "--restart-transcription"])).toMatchObject({ engineId: "qwen3", localServiceUrl: "http://127.0.0.1:8766", restart: true });
+  });
+  it("rejects unsupported engines and remote service URLs", () => {
+    expect(() => parseCliArgs(["transcribe", "source.mp4", "--engine", "unknown"])).toThrow();
+    expect(() => parseCliArgs(["transcribe", "source.mp4", "--asr-url", "https://example.com"])).toThrow();
+  });
+
+  it("accepts the multilingual Whisper tier with a language hint", () => {
+    expect(parseCliArgs(["transcribe", "source.mp4", "--engine", "whisper", "--language", "tr"]))
+      .toMatchObject({ engineId: "whisper", language: "tr" });
+    expect(() => parseCliArgs(["transcribe", "source.mp4", "--engine", "whisper", "--language", "--json"])).toThrow(/语言代码/);
+    expect(parseCliArgs(["clip", "source.mp4", "--engine", "whisper", "--language", "tr"]))
+      .toMatchObject({ command: "clip", engineId: "whisper", language: "tr" });
+  });
+});

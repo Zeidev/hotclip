@@ -1,0 +1,41 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+out/
+dist/
+release/
+
+# local data / models (downloaded on first run, never committed)
+models/
+*.log
+
+# local smoke-test scratch (whisper:smoke model cache, probes, workspace temp)
+.whisper-smoke/
+.whisper-cpp/
+.whisper-cpp-gpu/
+.smoke/
+.test-tmp/
+.pnpm-home/
+.npm-cache/
+.electron-cache/
+.electron-builder-cache/
+
+# editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.local
+
+# env
+.env
+.env.*
+dist/
+build/icon-b64.txt
+
+# Claude Code 本地辅助(预览验收配置等,不入库)
+.claude/
+
+# Optional isolated speech runtime
+.venv-qwen/

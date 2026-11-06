@@ -1,0 +1,93 @@
+/**
+ * ASR engine catalog — the platform-neutral facts about every transcription
+ * engine the app can offer. Display strings live in renderer i18n keyed by
+ * `id`; runtime state (installed) is added by the backend when listing.
+ */
+
+export interface AsrEngineFacts {
+  id: string;
+  kind: "local" | "cloud";
+  /** Languages the engine handles well. */
+  langs: string[];
+  /** Approximate one-time model download, MB (local engines only). */
+  sizeMB?: number;
+  /** Relative speed tier: 1 = slow … 3 = fast. */
+  speed: 1 | 2 | 3;
+  /** Relative accuracy tier: 1 = okay … 3 = best. */
+  accuracy: 1 | 2 | 3;
+  /** True when the user's media must leave the machine. */
+  uploads: boolean;
+  /** User-managed local service; quality tiers are not benchmark claims. */
+  experimental?: boolean;
+}
+
+/**
+ * Order = display order. The first entry is the zero-config default:
+ * smallest download, fully offline, five languages.
+ */
+export const ASR_CATALOG: AsrEngineFacts[] = [
+  {
+    id: "sensevoice",
+    kind: "local",
+    langs: ["zh", "yue", "en", "ja", "ko"],
+    sizeMB: 170,
+    speed: 3,
+    accuracy: 1,
+    uploads: false,
+  },
+  {
+    id: "paraformer",
+    kind: "local",
+    langs: ["zh", "en"],
+    sizeMB: 230,
+    speed: 2,
+    accuracy: 2,
+    uploads: false,
+  },
+  {
+    id: "fireredasr",
+    kind: "local",
+    langs: ["zh", "方言", "en"],
+    sizeMB: 520,
+    speed: 2,
+    accuracy: 3,
+    uploads: false,
+  },
+  {
+    // The only local tier that hears anything outside CJK + English: Whisper
+    // large-v3-turbo (Turkish, Spanish, Arabic, Russian... 90+ languages).
+    // Slow on CPU (809M encoder) — pick it for the languages, not for speed.
+    id: "whisper",
+    kind: "local",
+    langs: ["tr", "en", "multilingual", "90+"],
+    sizeMB: 1037,
+    speed: 1,
+    accuracy: 3,
+    uploads: false,
+  },
+  {
+    // Same Whisper turbo model, different runtime: whisper.cpp ships CUDA /
+    // Vulkan / Metal builds, so a GPU finishes in minutes what the CPU sherpa
+    // tier needs an hour for. Binary and model are user-managed (see
+    // docs/whisper-multilingual.md) — HotClip only drives them.
+    id: "whisper-cpp",
+    kind: "local",
+    langs: ["tr", "en", "multilingual", "90+"],
+    speed: 3,
+    accuracy: 3,
+    uploads: false,
+    experimental: true,
+  },
+  {
+    id: "qwen3", kind: "local", langs: ["30 languages"], speed: 1, accuracy: 3,
+    uploads: false, experimental: true,
+  },
+  {
+    id: "elevenlabs",
+    kind: "cloud",
+    langs: ["90+", "zh", "en"],
+    speed: 3,
+    accuracy: 3,
+    uploads: true,
+  },
+];
