@@ -170,7 +170,7 @@ export interface SpeechRunOptions {
 
 export interface AlignmentRequest {
   segmentIds: number[];
-  engine: "paraformer" | "qwen3";
+  engine: "paraformer" | "qwen3" | "whisper-cpp";
   language?: string;
   localServiceUrl?: string;
 }

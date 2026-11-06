@@ -156,9 +156,11 @@ export class WhisperCppEngine implements TranscribeEngine {
         { maxBuffer: 32 * 1024 * 1024, signal }
       );
       onProgress?.({ fraction: 0, stage: "transcribing" });
-      await this.runCli(config, wav, outBase, options, (fraction) => onProgress?.({ fraction, stage: "transcribing" }));
-
-      const payload = JSON.parse(await readFile(`${outBase}.json`, "utf8")) as WhisperCppJson;
+      const payload = await runWhisperCpp(config, wav, outBase, {
+        language: options.language,
+        signal,
+        onFraction: (fraction) => onProgress?.({ fraction, stage: "transcribing" }),
+      });
       const { words, language } = whisperCppWords(payload, media.durationSec);
       if (words.length === 0) throw new Error("transcribe:empty-result");
       onProgress?.({ fraction: 1, stage: "finalizing" });
@@ -167,55 +169,82 @@ export class WhisperCppEngine implements TranscribeEngine {
       await rm(temp, { recursive: true, force: true }).catch(() => {});
     }
   }
+}
 
-  /** Spawn one CLI run, streaming whisper.cpp's own progress line. */
-  private runCli(
-    config: WhisperCppConfig,
-    wav: string,
-    outBase: string,
-    options: TranscribeOptions,
-    onFraction: (fraction: number) => void
-  ): Promise<void> {
-    const language = options.language && options.language !== "auto" ? options.language : "auto";
-    const threads = Math.max(2, Math.min(8, cpus().length - 2));
-    const args = [
-      "-m", config.model,
-      "-f", wav,
-      "-l", language,
-      "-ojf",              // full JSON: per-token offsets (word timings)
-      "-of", outBase,
-      "-pp",               // print progress on stderr
-      "-t", String(threads),
-    ];
-    if (config.noGpu) args.push("-ng");
+export interface WhisperCppRunOptions {
+  language?: string;
+  /**
+   * Context prompt (whisper.cpp `--prompt`). The forced aligner feeds the
+   * known transcript here so the model reproduces the same words and only their
+   * timings are taken — no ASR text is used.
+   */
+  prompt?: string;
+  /**
+   * whisper.cpp `--max-context`. 0 drops cross-window text context, which stops
+   * the repetition loop the decoder falls into on concatenated cue audio
+   * ("sizi?-i-ki-di-mı…"); leave undefined for normal transcription.
+   */
+  maxContext?: number;
+  onFraction?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
 
-    return new Promise<void>((resolve, reject) => {
-      const child = spawn(config.binary, args, { cwd: dirname(config.binary), windowsHide: true });
-      let tail = "";
-      let cancelled = false;
-      const onAbort = (): void => {
-        cancelled = true;
-        child.kill();
-      };
-      options.signal?.addEventListener("abort", onAbort, { once: true });
-      const done = (): void => options.signal?.removeEventListener("abort", onAbort);
+/**
+ * Run the CLI once on a 16 kHz mono WAV and return the parsed
+ * `--output-json-full` payload. Shared by the transcription engine and the
+ * forced aligner; spawns one process, so callers batch their work per clip.
+ */
+export async function runWhisperCpp(
+  config: WhisperCppConfig,
+  wavPath: string,
+  outBase: string,
+  options: WhisperCppRunOptions = {}
+): Promise<WhisperCppJson> {
+  const language = options.language && options.language !== "auto" ? options.language : "auto";
+  const threads = Math.max(2, Math.min(8, cpus().length - 2));
+  const args = [
+    "-m", config.model,
+    "-f", wavPath,
+    "-l", language,
+    "-ojf",              // full JSON: per-token offsets (word timings)
+    "-of", outBase,
+    "-pp",               // print progress on stderr
+    "-t", String(threads),
+  ];
+  // whisper.cpp keeps prompt context bounded; a cue's text fits comfortably.
+  const prompt = options.prompt?.trim();
+  if (prompt) args.push("--prompt", prompt.slice(0, 800));
+  if (options.maxContext !== undefined) args.push("--max-context", String(options.maxContext));
+  if (config.noGpu) args.push("-ng");
 
-      child.stderr?.on("data", (chunk: Buffer) => {
-        const text = chunk.toString();
-        tail = (tail + text).slice(-4000);
-        const match = /progress\s*=\s*(\d+)%/.exec(text);
-        if (match) onFraction(Math.min(0.99, Number(match[1]) / 100));
-      });
-      child.on("error", (error) => {
-        done();
-        reject(error);
-      });
-      child.on("close", (code) => {
-        done();
-        if (cancelled) reject(new Error("speech:cancelled"));
-        else if (code === 0) resolve();
-        else reject(new Error(`whisper-cpp:exit-${code}\n${tail.slice(-600)}`));
-      });
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(config.binary, args, { cwd: dirname(config.binary), windowsHide: true });
+    let tail = "";
+    let cancelled = false;
+    const onAbort = (): void => {
+      cancelled = true;
+      child.kill();
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    const done = (): void => options.signal?.removeEventListener("abort", onAbort);
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      tail = (tail + text).slice(-4000);
+      const match = /progress\s*=\s*(\d+)%/.exec(text);
+      if (match) options.onFraction?.(Math.min(0.99, Number(match[1]) / 100));
     });
-  }
+    child.on("error", (error) => {
+      done();
+      reject(error);
+    });
+    child.on("close", (code) => {
+      done();
+      if (cancelled) reject(new Error("speech:cancelled"));
+      else if (code === 0) resolve();
+      else reject(new Error(`whisper-cpp:exit-${code}\n${tail.slice(-600)}`));
+    });
+  });
+
+  return JSON.parse(await readFile(`${outBase}.json`, "utf8")) as WhisperCppJson;
 }

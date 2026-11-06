@@ -7,7 +7,7 @@ import type { AlignmentPreview, Transcript } from "../../../../shared/api-types"
 
 export function AlignmentReview({ transcript, selectedIds, onAudition }: { transcript: Transcript; selectedIds: number[]; onAudition: (start: number, end: number) => void }): React.JSX.Element {
   const t = useT("transcribe");
-  const [engine, setEngine] = useState<"paraformer" | "qwen3">("paraformer");
+  const [engine, setEngine] = useState<"paraformer" | "qwen3" | "whisper-cpp">("paraformer");
   const [language, setLanguage] = useState("auto");
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<AlignmentPreview | null>(null);
@@ -34,11 +34,11 @@ export function AlignmentReview({ transcript, selectedIds, onAudition }: { trans
   return <div className="shrink-0 space-y-2 border-b border-line/60 px-3 py-2 text-xs">
     <div className="flex flex-wrap items-center gap-2">
       <label>{t("alignEngine")} <select aria-label={t("alignEngine")} value={engine} disabled={busy} onChange={(e) => setEngine(e.target.value as typeof engine)} className="rounded border border-line bg-panel-2 p-1.5">
-        <option value="paraformer">Paraformer · 中文 / English</option><option value="qwen3">Qwen3 · {t("localServiceName")}</option>
+        <option value="paraformer">Paraformer · 中文 / English</option><option value="qwen3">Qwen3 · {t("localServiceName")}</option><option value="whisper-cpp">Whisper.cpp · {t("alignEngineWhisper")}</option>
       </select></label>
       <label>{t("alignLanguage")} <select aria-label={t("alignLanguage")} value={language} disabled={busy} onChange={(e) => setLanguage(e.target.value)} className="rounded border border-line bg-panel-2 p-1.5">
         <option value="auto">{t("alignLanguageAuto")}</option>
-        {["zh", "en", "yue", "fr", "de", "it", "ja", "ko", "pt", "ru", "es"].map((lang) => <option key={lang}>{lang}</option>)}
+        {["tr", "zh", "en", "yue", "fr", "de", "it", "ja", "ko", "pt", "ru", "es"].map((lang) => <option key={lang}>{lang}</option>)}
       </select></label>
       <button type="button" disabled={busy || !selectedIds.length} onClick={() => void run()} className="rounded border border-ember/40 px-2.5 py-1.5 text-ember disabled:opacity-40">{busy ? t("alignRunning") : t("alignSelected", { n: selectedIds.length })}</button>
       {busy && <button type="button" onClick={() => getApi().cancelAlignment()} className="rounded border border-line px-2 py-1.5">{t("alignCancel")}</button>}

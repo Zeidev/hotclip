@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { adjustClipBoundary, adjustCandidateBoundary } from "../../shared/boundary";
+import { adjustClipBoundary, adjustCandidateBoundary, isEstimatedCue, snapSelectionToCues } from "../../shared/boundary";
+import { PIECE_JOINER } from "../../shared/pieces";
 import type { Transcript } from "../../shared/api-types";
 
 // four 4s sentences back to back: [0-4] [4-8] [8-12] [12-16]
@@ -64,6 +65,65 @@ describe("adjustClipBoundary", () => {
       ],
     };
     expect(adjustClipBoundary(shortTx, { startSec: 0, endSec: 2 }, "end", -1)).toBeNull();
+  });
+});
+
+describe("snapSelectionToCues (imported subtitles)", () => {
+  // Sentence 2 is 4–8s. In the imported-subtitle world its cue time is real
+  // while the word split inside it is only estimated.
+  const words = (startSec: number, count: number, estimated: boolean) =>
+    Array.from({ length: count }, (_, i) => ({
+      text: `w${i}`,
+      startSec: startSec + i * 0.5,
+      endSec: startSec + i * 0.5 + 0.4,
+      timingSource: (estimated ? "estimated" : "native") as "estimated" | "native",
+    }));
+  const imported: Transcript = {
+    language: "tr",
+    engine: "subtitle-srt",
+    durationSec: 16,
+    segments: [
+      { id: 1, startSec: 0, endSec: 4, text: "bir", words: words(0, 8, true) },
+      { id: 2, startSec: 4, endSec: 8, text: "iki", words: words(4, 8, true) },
+      { id: 3, startSec: 8, endSec: 12, text: "üç", words: words(8, 8, true) },
+    ],
+  };
+
+  it("flags cues whose word split is estimated", () => {
+    expect(isEstimatedCue(imported.segments[1])).toBe(true);
+    const native = { ...imported.segments[1], words: words(4, 8, false) };
+    expect(isEstimatedCue(native)).toBe(false);
+    expect(isEstimatedCue({ ...imported.segments[1], words: [] })).toBe(false);
+  });
+
+  it("pulls a mid-sentence edge back to the cue boundary", () => {
+    const r = snapSelectionToCues(imported, { startSec: 4.6, endSec: 11.4, text: "x" });
+    expect(r.snapped).toBe(true);
+    expect(r.startSec).toBe(4);
+    expect(r.endSec).toBe(12);
+    expect(r.text).toBe("iki üç");
+  });
+
+  it("leaves real word timings and far-away cuts alone", () => {
+    const native: Transcript = {
+      ...imported,
+      segments: imported.segments.map((s) => ({ ...s, words: words(s.startSec, 8, false) })),
+    };
+    expect(snapSelectionToCues(native, { startSec: 5.6, endSec: 11.4, text: "x" }).snapped).toBe(false);
+    // 3s from the cue start / end is a deliberate word-level cut, not a sloppy edge.
+    expect(snapSelectionToCues(imported, { startSec: 7, endSec: 9, text: "x" }).snapped).toBe(false);
+  });
+
+  it("snaps each stitched piece and rebuilds the text", () => {
+    const r = snapSelectionToCues(imported, {
+      startSec: 0.5,
+      endSec: 11.5,
+      pieces: [{ startSec: 0.5, endSec: 3.7 }, { startSec: 6.5, endSec: 11.5 }],
+      text: "x",
+    });
+    expect(r.snapped).toBe(true);
+    expect(r.pieces).toEqual([{ startSec: 0, endSec: 4 }, { startSec: 6.5, endSec: 12 }]);
+    expect(r.text).toBe(`bir${PIECE_JOINER}iki üç`);
   });
 });
 

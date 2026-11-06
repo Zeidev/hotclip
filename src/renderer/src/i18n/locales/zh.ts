@@ -197,6 +197,7 @@ export const zh = {
     visualSearchCount: "{n} 条画面命中",
     alignToggle: "校准时间",
     alignEngine: "模型",
+    alignEngineWhisper: "90+ 语种(GPU)",
     alignLanguage: "语言",
     alignLanguageAuto: "沿用逐句稿",
     alignRunning: "正在校准…",

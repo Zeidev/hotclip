@@ -23,12 +23,26 @@ describe("review-time alignment", () => {
     expect(result.skipped[0].reason).toBe("unsupported-language");
     expect(alignmentLanguage("French", "Bonjour")).toBe("fr");
   });
-  it("retains original words on bad/overlapping timing and oversized requests", async () => {
+  it("clamps out-of-range timing into the cue instead of discarding the cue", async () => {
+    // An aligner can hand back times from the decode padding; clamping is right,
+    // and a cue must not be dropped just because its tail had no room.
     const result = await previewTranscriptAlignment("unused", transcript, { segmentIds: [1], engine: "paraformer" }, "unused", undefined,
       async (s) => s.words.map((w) => ({ ...w, startSec: 1.9, endSec: 9 })));
-    expect(result.segments).toEqual([]);
-    expect(result.skipped[0].reason).toBe("invalid-timing");
+    expect(result.skipped).toEqual([]);
+    const words = result.segments[0].words;
+    expect(words.every((w, i) => w.startSec >= 0 && w.endSec <= 2 && w.endSec > w.startSec && (i === 0 || w.startSec >= words[i - 1].endSec))).toBe(true);
     await expect(previewTranscriptAlignment("unused", transcript, { segmentIds: [1, 2], engine: "paraformer" }, "unused")).rejects.toThrow("batch-limit");
+  });
+  it("accepts any language on the whisper.cpp aligner (no zh/en gate)", async () => {
+    // Imported Turkish subtitles used to be skipped by the Paraformer zh/en gate;
+    // whisper.cpp is multilingual, so the cue must reach the aligner instead.
+    const value = { ...transcript, language: "tr", segments: [{ ...segment, text: "merhaba dünya", words: rebuildWords("merhaba dünya", 0, 2) }] };
+    let calls = 0;
+    const result = await previewTranscriptAlignment("unused", value, { segmentIds: [1], engine: "whisper-cpp" }, "unused", undefined,
+      async (s) => { calls++; return s.words.map((w) => ({ ...w, timingSource: "aligned" })); });
+    expect(calls).toBe(1);
+    expect(result.skipped).toEqual([]);
+    expect(result.alignedWords).toBe(2);
   });
   it("normalizes multilingual matching and rejects unbounded LCS work", () => {
     const words = rebuildWords("café Привет مرحبا", 0, 3);

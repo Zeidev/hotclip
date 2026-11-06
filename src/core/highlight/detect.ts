@@ -26,6 +26,7 @@ import { detectClipCommands } from "./commands";
 import { applyRuleGate, type GateTier } from "./gate";
 import { utilityDensity, utilityBoost, UTILITY_SAVE_WORTHY } from "../../shared/utility-density";
 import { clipDurationSec, MAX_PIECES, type ClipPiece } from "../../shared/pieces";
+import { snapSelectionToCues } from "../../shared/boundary";
 import { isLocalBaseUrl } from "../../shared/llm-preflight";
 import { LLM_LOCAL_TIMEOUT_MS, LLM_REMOTE_TIMEOUT_MS, LlmTransportError, llmRequestBudget, modelErrorDetail, requestLlmText, retryAfterMs, type LlmRequestBudget } from "../llm-transport";
 import { genrePreset, normalizeGenreId, type EvidenceClass } from "../genre";
@@ -631,15 +632,19 @@ export async function detectHighlights(
   for (const sel of selections) {
     const resolved = resolveSelection(transcript, sel);
     if (!resolved) continue;
+    // Imported subtitles carry real cue times but estimated word times: a cut
+    // snapped to such a word can land mid-sentence. Snap only short hops to the
+    // cue boundary; cuts with real word timings are untouched.
+    const bounded = snapSelectionToCues(transcript, resolved);
     // 时长按「成片时长」算:多段拼接是各段之和,不是跨度(跨度可能有十几分钟)
-    const dur = clipDurationSec(resolved);
+    const dur = clipDurationSec(bounded);
     if (dur < lo || dur > hi) continue;
     candidates.push({
       id: candidates.length + 1,
-      startSec: resolved.startSec,
-      endSec: resolved.endSec,
-      pieces: resolved.pieces,
-      text: resolved.text,
+      startSec: bounded.startSec,
+      endSec: bounded.endSec,
+      pieces: bounded.pieces,
+      text: bounded.text,
       title: sel.title,
       hook: sel.hook,
       score: sel.score,

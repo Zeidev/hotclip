@@ -195,6 +195,36 @@ model was replayed for the turbo model and looked "instant". Engines now expose
 (and the same for `HOTCLIP_WHISPER_MODEL_DIR` exports), so swapping a model
 transcribes for real instead of replaying the old result.
 
+## Forced alignment for imported subtitles (no ASR)
+
+If you bring your own subtitle file, the cue times are real but the word times
+inside each cue are only estimates, which weakens word-level cutting and
+karaoke captions. The calibration panel's **Whisper.cpp · 90+ languages (GPU)**
+option fixes that without transcribing anything: your text stays authoritative
+and only the timings are produced.
+
+How it runs:
+
+1. every selected cue's audio is cut out (±0.4 s padding) and concatenated into
+   one 16 kHz WAV;
+2. a **single** `whisper-cli` run decodes it — one process per batch, because
+   whisper.cpp pays a fixed startup cost (≈25 s on this Pascal CUDA build) per
+   process;
+3. token times are mapped back through the concatenation offsets, each token is
+   assigned to the nearest cue (not to a strict window: imported subtitles can
+   be a second or two off), and `refineWordTimings` (character LCS) moves your
+   words onto them. Text is never replaced.
+
+Two settings matter and are not optional:
+
+- `--max-context 0` — without it the decoder falls into a repetition loop on
+  concatenated cue audio (`sizi?-i-ki-di-mı-zi-ki-di-mı-rlıyor,`) and 4 of 6
+  Turkish cues failed to align. With it: **6/6 cues, 57/60 words aligned** on a
+  29.3 s test batch (measured 37.8 s wall clock).
+- Imported subtitles also drive the sentence-boundary lock: an estimated edge
+  within 1 s of a cue boundary snaps to that boundary, so cuts stop landing
+  mid-sentence. Real word timings are never snapped.
+
 ## Turkish fine-tune (or any other Whisper fine-tune)
 
 `sherpa-onnx` publishes Whisper as three loose ONNX files, so any Whisper

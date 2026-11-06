@@ -195,6 +195,7 @@ export const en = {
     visualSearchCount: "{n} visual matches",
     alignToggle: "Align timing",
     alignEngine: "Model",
+    alignEngineWhisper: "90+ languages (GPU)",
     alignLanguage: "Language",
     alignLanguageAuto: "Use transcript language",
     alignRunning: "Aligning…",

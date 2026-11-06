@@ -112,3 +112,81 @@ export function piecesText(transcript: Transcript, pieces: ClipPiece[]): string 
     .map((p) => overlapping(transcript, p.startSec, p.endSec).map((s) => s.text).join(" "))
     .join(PIECE_JOINER);
 }
+
+/**
+ * A cue whose internal word split cannot be trusted: imported subtitles and
+ * hand-edited cues carry real cue times but "estimated" word times, so a cut
+ * snapped to such a word can land in the middle of a sentence. The cue time is
+ * still authoritative — it came from the subtitle file.
+ */
+export function isEstimatedCue(segment: TranscriptSegment): boolean {
+  if (!segment.words?.length) return false;
+  const estimated = segment.words.filter((word) => word.timingSource === "estimated").length;
+  return estimated * 2 >= segment.words.length;
+}
+
+/** Ignore edges that already sit on a cue boundary (float noise). */
+const SNAP_EPS = 0.02;
+
+function cueContaining(transcript: Transcript, sec: number): TranscriptSegment | null {
+  return transcript.segments.find((s) => sec > s.startSec + SNAP_EPS && sec < s.endSec - SNAP_EPS) ?? null;
+}
+
+function snapEdge(
+  transcript: Transcript,
+  sec: number,
+  edge: "start" | "end",
+  maxMoveSec: number
+): { sec: number; snapped: boolean } {
+  const cue = cueContaining(transcript, sec);
+  if (!cue || !isEstimatedCue(cue)) return { sec, snapped: false };
+  // Only short hops: a deliberate mid-sentence cut stays put, and a cut that is
+  // already near the boundary does not grow the clip by more than maxMoveSec.
+  const moved = edge === "start" ? sec - cue.startSec : cue.endSec - sec;
+  if (moved <= 0 || moved > maxMoveSec) return { sec, snapped: false };
+  return { sec: edge === "start" ? cue.startSec : cue.endSec, snapped: true };
+}
+
+export interface BoundedSelection {
+  startSec: number;
+  endSec: number;
+  pieces?: ClipPiece[];
+  text: string;
+  /** True when at least one edge moved. */
+  snapped: boolean;
+}
+
+/**
+ * Snap selection edges that land inside an estimated cue to that cue's boundary.
+ * No-op for transcripts with real word timings, and for cuts more than
+ * `maxMoveSec` away from the boundary (those are deliberate word-level cuts).
+ */
+export function snapSelectionToCues(
+  transcript: Transcript,
+  selection: { startSec: number; endSec: number; pieces?: ClipPiece[]; text: string },
+  maxMoveSec = 1
+): BoundedSelection {
+  const pieces = selection.pieces && selection.pieces.length > 1 ? selection.pieces : null;
+  if (!pieces) {
+    const start = snapEdge(transcript, selection.startSec, "start", maxMoveSec);
+    const end = snapEdge(transcript, selection.endSec, "end", maxMoveSec);
+    if (!start.snapped && !end.snapped) return { ...selection, snapped: false };
+    const text = overlapping(transcript, start.sec, end.sec).map((s) => s.text).join(" ");
+    return { startSec: start.sec, endSec: end.sec, text, snapped: true };
+  }
+
+  const next = pieces.map((piece) => {
+    const start = snapEdge(transcript, piece.startSec, "start", maxMoveSec);
+    const end = snapEdge(transcript, piece.endSec, "end", maxMoveSec);
+    return { startSec: start.sec, endSec: end.sec };
+  });
+  const changed = next.some((piece, i) => Math.abs(piece.startSec - pieces[i].startSec) > EPS || Math.abs(piece.endSec - pieces[i].endSec) > EPS);
+  if (!changed || next.some((piece) => piece.endSec <= piece.startSec + EPS)) return { ...selection, snapped: false };
+  return {
+    startSec: next[0].startSec,
+    endSec: next[next.length - 1].endSec,
+    pieces: next,
+    text: piecesText(transcript, next),
+    snapped: true,
+  };
+}
