@@ -320,6 +320,11 @@ export interface ExportRenderOptions {
   jumpCut?: boolean;
   /** 保留呼吸口:跳剪剪长停顿时每个剪口多留一口气(~0.25s),不无缝贴死。 */
   keepBreath?: boolean;
+  /**
+   * 跳剪 punch-in:隔段 4% 轻微推近,同机位拼接读起来像重拍一次。默认开,
+   * 传 false 回到完全平切的画面。
+   */
+  punchIn?: boolean;
   /** 说话人标签:多说话人切片换人时字幕行首加彩色「A:」(词表带标注才生效)。 */
   speakerLabels?: boolean;
   /** 模板受控微扰:按切片种子小幅抖动字幕几何(字号/基线),批量出片不共享模板指纹。 */
@@ -954,6 +959,13 @@ export async function exportClips(
       const smartDenoise = Boolean(options.denoise && options.denoiseMode === "smart");
       const baseDenoise = smartDenoise ? false : options.denoise;
       const baseNormalizeLoudness = smartDenoise ? false : options.normalizeLoudness;
+      // Punch-in only matters on a spliced picture, and concat needs every piece
+      // on the same geometry — so the source frame size is the anchor.
+      const srcWidth = srcInfo?.width ?? 0;
+      const srcHeight = srcInfo?.height ?? 0;
+      const punchIn = options.punchIn !== false && srcWidth > 0 && srcHeight > 0
+        ? { width: srcWidth, height: srcHeight }
+        : undefined;
       const cutOptions: CutOptions = trackPlan
         ? { ...sourceStreams, trackPlan, autoZoom, visualEnhance, color: activeColor, subtitlePath, fontsDir: subtitlePath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: sensitiveMuteRanges, watermark, metadata: aigcMeta, crf: options.crf, encoder: videoEncoder }
         : {
@@ -1000,6 +1012,7 @@ export async function exportClips(
               metadata: aigcMeta,
               crf: options.crf,
               encoder: videoEncoder,
+              punchIn,
               audiogram: audioOnly ? audiogramSpec(Boolean(options.vertical), options.brand?.highlightColor) : undefined,
             },
           })
@@ -1045,7 +1058,7 @@ export async function exportClips(
             onTimeSec
           );
         } else if (baseSegments.length > 1) {
-          await cutJumpClip(inputPath, cutTarget, clip.startSec, baseSegments, cutOptions, signal, onTimeSec);
+          await cutJumpClip(inputPath, cutTarget, clip.startSec, baseSegments, { ...cutOptions, punchIn }, signal, onTimeSec);
         } else {
           // Single kept segment: copy H.264 video only when its start is proven
           // keyframe-aligned and no pixel-changing filter is active.

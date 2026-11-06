@@ -118,8 +118,27 @@ export interface CutOptions {
   muteRanges?: Array<{ startSec: number; endSec: number }>;
   /** 品牌水印:PNG 烧进画面一角(在字幕之上)。 */
   watermark?: WatermarkSpec;
+  /**
+   * Jump-cut only: alternate pieces get a mild push-in, so a same-angle splice
+   * reads as a re-take instead of a stutter. Every piece is scaled to the same
+   * even target geometry (concat requires identical frames); omit the field and
+   * the graph is byte-for-byte what it was before.
+   */
+  punchIn?: { width: number; height: number; scale?: number };
   /** 容器元数据(如 AIGC 隐式标识);copy 模式同样写入。 */
   metadata?: Record<string, string>;
+}
+
+/** Alternate jump-cut pieces push in by this factor (4% reads as a re-take). */
+export const PUNCH_IN_SCALE = 1.04;
+
+/**
+ * yuv420p needs even dimensions; concat needs all pieces identical. Round DOWN
+ * so a crop can never ask for more rows/columns than the scaled frame has
+ * ("Failed to inject frame into filter network" when it does).
+ */
+function evenFrame(n: number): number {
+  return Math.max(2, Math.floor(n / 2) * 2);
 }
 
 /** -metadata k=v 参数对(纯函数,cut 与 audiogram 共用)。 */
@@ -361,10 +380,27 @@ export function buildJumpCutArgs(
   const labels: string[] = [];
   const videoInput = ffmpegVideoStreamSpecifier(options.videoStreamIndex);
   const audioInput = ffmpegAudioStreamSpecifier(options.audioStreamIndex);
+  const punch = options.punchIn;
+  const punchW = punch ? evenFrame(punch.width) : 0;
+  const punchH = punch ? evenFrame(punch.height) : 0;
+  const punchScale = punch?.scale ?? PUNCH_IN_SCALE;
   segments.forEach((s, i) => {
     const a = Math.max(0, s.startSec - seek);
     const b = Math.max(a, s.endSec - seek);
-    parts.push(`[${videoInput}]trim=start=${a.toFixed(3)}:end=${b.toFixed(3)},setpts=PTS-STARTPTS[v${i}]`);
+    const visual = [`trim=start=${a.toFixed(3)}:end=${b.toFixed(3)}`, "setpts=PTS-STARTPTS"];
+    if (punch) {
+      if (i % 2 === 1) {
+        // Odd pieces push in; even pieces only rescale to the same target, so
+        // the splice alternates between two framing sizes. setsar=1 on both:
+        // scale normalizes SAR to 1:1 while trim/crop keep the source's, and
+        // concat rejects pieces whose SAR differs even at identical size.
+        visual.push(`scale=${evenFrame(punch.width * punchScale)}:${evenFrame(punch.height * punchScale)}:flags=bicubic`);
+        visual.push(`crop=${punchW}:${punchH}`, "setsar=1");
+      } else {
+        visual.push(`scale=${punchW}:${punchH}`, "setsar=1");
+      }
+    }
+    parts.push(`[${videoInput}]${visual.join(",")}[v${i}]`);
     // 每段两端 30ms 淡化:相邻段的淡出+淡入在拼缝处相接,消掉跳剪爆音
     const fades = edgeFadeFilters(b - a);
     const fadeSuffix = fades.length > 0 ? `,${fades.join(",")}` : "";

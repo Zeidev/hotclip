@@ -147,6 +147,22 @@ describe("buildCutArgs", () => {
     expect(graph.indexOf("eq=brightness=")).toBeLessThan(graph.indexOf("subtitles=filename="));
   });
 
+  it("jump-cut punch-in alternates the framing on one shared geometry", () => {
+    const args = buildJumpCutArgs("/i.mp4", "/o.mp4", 0, [{ startSec: 0, endSec: 2 }, { startSec: 3, endSec: 5 }], {
+      punchIn: { width: 1920, height: 1080 },
+    });
+    const graph = args[args.indexOf("-filter_complex") + 1];
+    // even piece: only rescaled; odd piece: 4% push-in then cropped back.
+    expect(graph).toContain("scale=1920:1080");
+    expect(graph).toContain("scale=1996:1122");
+    expect(graph).toContain("crop=1920:1080");
+    expect(graph.match(/setsar=1/g)).toHaveLength(2);
+    expect(graph.match(/crop=1920:1080/g)).toHaveLength(1);
+    // No punch-in → exactly the legacy graph (concat needs identical geometry).
+    const plain = buildJumpCutArgs("/i.mp4", "/o.mp4", 0, [{ startSec: 0, endSec: 2 }, { startSec: 3, endSec: 5 }], {});
+    expect(plain[plain.indexOf("-filter_complex") + 1]).not.toContain("scale=");
+  });
+
   it("keeps undefined and explicit SDR color plans on the legacy argument path", () => {
     const legacy = buildCutArgs("/i.mp4", "/o.mp4", 0, 5, { mode: "copy" });
     const sdr = buildCutArgs("/i.mp4", "/o.mp4", 0, 5, { mode: "copy", color: colorPlan("sdr") });

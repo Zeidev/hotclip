@@ -506,8 +506,13 @@ export interface ExportOptions {
   captionStyle: CaptionStyleChoice;
   /** Splice out intra-clip silences for a tighter, hand-edited rhythm. */
   jumpCut: boolean;
-  /** 保留呼吸口:跳剪剪长停顿时每个剪口多留一口气(~0.25s),不无缝贴死。 */
+  /** 跳剪剪长停顿时每个剪口多留一口气(~0.25s),不无缝贴死。 */
   keepBreath?: boolean;
+  /**
+   * Jump-cut punch-in: alternate kept pieces get a ~4% push-in so a same-angle
+   * splice reads as a re-take. Default on; set false for a flat cut.
+   */
+  punchIn?: boolean;
   /** 说话人标签:多说话人切片换人时字幕行首加彩色「A:」(开了多人对谈才有标注)。 */
   speakerLabels?: boolean;
   /** 模板受控微扰:按切片种子小幅抖动字幕几何,批量出片不共享模板指纹。 */
