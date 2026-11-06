@@ -133,8 +133,15 @@ describe("local speech engine options", () => {
     expect(() => parseCliArgs(["transcribe", "source.mp4", "--asr-url", "https://example.com"])).toThrow();
   });
 
-  it("accepts the multilingual Whisper tier with a language hint", () => {
-    expect(parseCliArgs(["transcribe", "source.mp4", "--engine", "whisper", "--language", "tr"]))
+  it("parses the jump-cut cross-fade window", () => {
+    expect(parseCliArgs(["clip", "source.mp4", "--crossfade", "80"]).transitionSec).toBeCloseTo(0.08, 5);
+    expect(parseCliArgs(["clip", "source.mp4"]).transitionSec).toBeUndefined();
+    for (const bad of ["5", "900", "abc", "--json"]) {
+      expect(() => parseCliArgs(["clip", "source.mp4", "--crossfade", bad])).toThrow(/crossfade/);
+    }
+  });
+
+  it("accepts the multilingual Whisper tier with a language hint", () => {    expect(parseCliArgs(["transcribe", "source.mp4", "--engine", "whisper", "--language", "tr"]))
       .toMatchObject({ engineId: "whisper", language: "tr" });
     expect(() => parseCliArgs(["transcribe", "source.mp4", "--engine", "whisper", "--language", "--json"])).toThrow(/语言代码/);
     expect(parseCliArgs(["clip", "source.mp4", "--engine", "whisper", "--language", "tr"]))

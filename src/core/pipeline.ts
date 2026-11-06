@@ -58,6 +58,8 @@ export interface AutoClipConfig extends DetectionOptions {
   autoEnhance?: boolean;
   /** Optional audio cleanup for unattended/headless exports; omitted means unchanged/off. */
   denoiseMode?: "basic" | "smart";
+  /** Jump-cut cross-fade between kept pieces (seconds). 0/unset = hard cut. */
+  transitionSec?: number;
   /** 参考爆款画像(analyzeReferenceVideo 的产物);选段向它的节奏靠拢。 */
   reference?: ReferenceProfile;
   /** 本机审阅记忆(桌面审阅台积累的采用/否决样例);选段向用户口味靠拢。 */
@@ -278,6 +280,7 @@ export async function autoClip(videoPath: string, cfg: AutoClipConfig): Promise<
       vertical,
       captionStyle: captions ? "keyword" : undefined,
       jumpCut: true,
+      transitionSec: cfg.transitionSec,
       cleanFillers: true,
       titleCard: true,
       normalizeLoudness: true,

@@ -49,6 +49,7 @@ const USAGE = `HotClip CLI —— 本地 AI 切片,素材不出电脑
       + 可自愈告警自动修复(首尾静音黑屏裁边/响度重归一,修复记录进 qa.repair)
       --auto-enhance: 本地测量保留画面,仅在明显偏暗/灰/过饱和时克制校正(默认关闭)
       --denoise: 基础固定滤镜降噪;--smart-denoise: 48kHz 本地模型增强人声,失败回退基础档
+      --crossfade <毫秒>  剪口交叉淡化(20-500,例如 80);缺省为硬切
 
   highlights / clip 共用选项:
       --genre <id>           直播品类;默认 auto,非法值会列出全部可选项
@@ -80,6 +81,8 @@ export interface CliArgs extends DetectionOptions {
   captions: boolean;
   autoEnhance: boolean;
   denoiseMode?: "basic" | "smart";
+  /** Jump-cut cross-fade in seconds (0 = hard cut). */
+  transitionSec?: number;
   outDir?: string;
   /** 对标爆款视频路径(参考画像驱动选段)。 */
   referencePath?: string;
@@ -107,6 +110,12 @@ export function parseCliArgs(argv: string[]): CliArgs {
     else if (a === "--auto-enhance") args.autoEnhance = true;
     else if (a === "--denoise") args.denoiseMode = "basic";
     else if (a === "--smart-denoise") args.denoiseMode = "smart";
+    else if (a === "--crossfade") {
+      const value = rest[++i];
+      const ms = Number(value);
+      if (!Number.isFinite(ms) || ms < 20 || ms > 500) throw new Error("--crossfade: 20-500 毫秒(例如 --crossfade 80)");
+      args.transitionSec = ms / 1000;
+    }
     else if (a === "--json") args.json = true;
     else if (a === "--download") args.download = true;
     else if (a === "--restart-transcription") args.restart = true;
@@ -316,6 +325,7 @@ async function main(signal?: AbortSignal): Promise<void> {
       captions: args.captions,
       autoEnhance: args.autoEnhance,
       denoiseMode: args.denoiseMode,
+      transitionSec: args.transitionSec,
       subtitlePath: args.subtitlePath,
       asr: { engineId: args.engineId, language: args.language, localServiceUrl: args.localServiceUrl, restart: args.restart },
       signal,

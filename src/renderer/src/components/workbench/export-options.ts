@@ -23,6 +23,8 @@ export function buildRenderToggles(opts: {
     vertical: prefs.vertical,
     captionStyle: prefs.captionStyle,
     jumpCut: prefs.jumpCut,
+    // 0 = hard cut; only a jump cut has splices to fade.
+    transitionSec: prefs.jumpCut && prefs.transitionSec > 0 ? prefs.transitionSec : undefined,
     keepBreath: prefs.keepBreath,
     speakerLabels: prefs.speakerLabels && diarize,
     templateJitter: prefs.templateJitter,

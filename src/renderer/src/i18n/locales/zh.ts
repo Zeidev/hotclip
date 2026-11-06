@@ -417,6 +417,8 @@ export const zh = {
     captionStyleHint: "点击切换字幕样式,直接烧录进画面",
     optJumpCut: "剪气口",
     optJumpCutHint: "自动剪掉说话间的停顿静音,成片节奏像人剪的",
+    optCrossfade: "剪口交叉淡化",
+    optCrossfadeHint: "每个剪口用画面+声音淡化代替硬切(80 毫秒),成片按淡化处数相应缩短",
     optCleanFillers: "剪口头禅",
     optCleanFillersHint: "自动剪掉 嗯/呃 等语气词和结巴重复,剪了什么会列进 clips.json",
     optCutRetakes: "剪重录",

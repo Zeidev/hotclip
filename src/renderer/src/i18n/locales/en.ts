@@ -467,6 +467,8 @@ export const en = {
     captionStyleHint: "Click to cycle caption styles (burned into the video)",
     optJumpCut: "Cut silences",
     optJumpCutHint: "Splice out pauses between speech — hand-edited rhythm, automatically",
+    optCrossfade: "Cross-fade splices",
+    optCrossfadeHint: "Fade picture and audio across each cut instead of a hard splice (80 ms); the export shortens accordingly",
     optCleanFillers: "Cut fillers",
     optCleanFillersHint: "Remove um/uh hesitations and stutter repeats; removals are listed in clips.json",
     optCutRetakes: "Cut retakes",

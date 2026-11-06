@@ -170,6 +170,13 @@ export function ExportPanel({
               disabled={!prefs.jumpCut}
               onToggle={() => setPref({ keepBreath: !prefs.keepBreath })}
             />
+            <SwitchRow
+              label={th("optCrossfade")}
+              hint={th("optCrossfadeHint")}
+              on={prefs.transitionSec > 0 && prefs.jumpCut}
+              disabled={!prefs.jumpCut}
+              onToggle={() => setPref({ transitionSec: prefs.transitionSec > 0 ? 0 : 0.08 })}
+            />
             <SwitchRow label={th("optCleanFillers")} hint={th("optCleanFillersHint")} on={prefs.cleanFillers} onToggle={() => setPref({ cleanFillers: !prefs.cleanFillers })} />
             <SwitchRow label={th("optCutRetakes")} hint={th("optCutRetakesHint")} on={prefs.cutRetakes} onToggle={() => setPref({ cutRetakes: !prefs.cutRetakes })} />
             <SwitchRow label={th("optAlign")} hint={th("optAlignHint")} on={prefs.preciseAlign} onToggle={() => setPref({ preciseAlign: !prefs.preciseAlign })} />
