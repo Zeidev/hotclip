@@ -335,6 +335,8 @@ LLM 只负责«挑哪段»并引用原文,时间戳由逐字转写**反向对齐
 
 ## 最近更新
 
+**[v0.33.3](https://github.com/xixihhhh/hotclip/releases/tag/v0.33.3)**(2026-11-06):跳剪更像人剪——隔段 4% punch-in、片间亮度/饱和度自动对齐、剪口对齐 BGM 重拍;可选剪口交叉淡化(默认硬切,开关在导出面板或 `--crossfade`)。
+
 **[v0.33.2](https://github.com/xixihhhh/hotclip/releases/tag/v0.33.2)**(2026-11-06):导入字幕可用 **whisper.cpp 强制对齐**拿回逐词时间(不改文本、一批只启动一次,修复解码器重复输出后实测 6/6 句对齐);估算时间下切点自动锁到句边界,不再切进句子中间。
 
 **[v0.33.1](https://github.com/xixihhhh/hotclip/releases/tag/v0.33.1)**(2026-11-06):设置页新增 **Whisper.cpp (GPU)** 接线区(选可执行文件与 ggml 模型即可,环境变量仍优先);未配置时引擎卡片直接提示;文档补土耳其语实测——`ggml whisper-large-v3-turkish` q5_0 达 3.3% WER,自带 sherpa 多语种档 40% WER 属已知待修。
