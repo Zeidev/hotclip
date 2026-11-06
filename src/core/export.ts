@@ -13,6 +13,7 @@ import { resolveFfmpegPath } from "./binaries";
 const execFileAsync = promisify(execFile);
 import { cutClip, cutJumpClip, concatClips, type CutOptions } from "./cut";
 import { measurePieceColors, planPieceColorGrades } from "./color-match";
+import { detectFileOnsets } from "./beat";
 import { planColdOpen, planFlashForward, FLASH_SKIP_NEAR_START_SEC } from "./coldopen";
 import { computeJumpCut, BREATH_PAD_SEC } from "./gaps";
 import { perturbLayout } from "../shared/perturb";
@@ -310,8 +311,21 @@ export interface ClipRenderOutcome {
   coverSelection?: CoverSelectionReceipt;
 }
 
-export interface ExportRenderOptions {
-  /** Center-crop reframe to 9:16 (1080×1920). */
+/**
+ * Beat grid of a music bed: a bounded 60 s prefix is enough for tempo and
+ * phase, and the result is cached per path so a whole batch pays once. An
+ * unreadable bed simply yields no grid (cuts stay where they were).
+ */
+const bgmBeatCache = new Map<string, number[]>();
+async function bgmBeatGrid(path: string, signal?: AbortSignal): Promise<number[] | undefined> {
+  const cached = bgmBeatCache.get(path);
+  if (cached) return cached.length > 0 ? cached : undefined;
+  const { onsets } = await detectFileOnsets(path, { maxSeconds: 60, signal }).catch(() => ({ onsets: [] as number[] }));
+  bgmBeatCache.set(path, onsets);
+  return onsets.length > 0 ? onsets : undefined;
+}
+
+export interface ExportRenderOptions {  /** Center-crop reframe to 9:16 (1080×1920). */
   vertical?: boolean;
   /** Caption style to burn in (clips must carry `words`); omit for none. */
   captionStyle?: CaptionStyle | WebCaptionStyle;
@@ -331,6 +345,11 @@ export interface ExportRenderOptions {
    * 差读成闪白。默认开;片间本来接近或黑白素材不会动。
    */
   colorMatch?: boolean;
+  /**
+   * 跳剪对齐背景音乐节拍:保留段的起点向后拉到最近的重拍(只向后、只吃本来就
+   * 要剪掉的静音),没有 BGM 时无效果。默认开。
+   */
+  beatSync?: boolean;
   /** 说话人标签:多说话人切片换人时字幕行首加彩色「A:」(词表带标注才生效)。 */
   speakerLabels?: boolean;
   /** 模板受控微扰:按切片种子小幅抖动字幕几何(字号/基线),批量出片不共享模板指纹。 */
@@ -804,6 +823,11 @@ export async function exportClips(
             // 保留呼吸口:每个剪口在句尾多留一口气,不是无缝贴死
             breathPadSec: options.keepBreath ? BREATH_PAD_SEC : 0,
             speechSpans,
+            // Music bed beat grid: cut boundaries land on the music. Measured
+            // once per bed (bounded prefix) and cached for the whole batch.
+            beats: options.bgmPath && options.beatSync !== false
+              ? await bgmBeatGrid(options.bgmPath, signal)
+              : undefined,
           });
           if (speechActivity && speechSpans) speechActivity.protectedGaps = plan.speechProtectedGaps ?? 0;
         }

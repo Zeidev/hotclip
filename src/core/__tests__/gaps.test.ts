@@ -24,6 +24,19 @@ describe("computeJumpCut", () => {
     expect(plan.removedSec).toBeGreaterThan(1.4);
   });
 
+  it("beat grid pulls a kept segment back and keeps the word remap in sync", () => {
+    const base = computeJumpCut(words, 10, 16.5);
+    const grid = [base.segments[1].startSec - 0.08];
+    const snapped = computeJumpCut(words, 10, 16.5, { beats: grid });
+    expect(snapped.segments[0]).toEqual(base.segments[0]);
+    expect(snapped.segments[1].startSec).toBeCloseTo(base.segments[1].startSec - 0.08, 3);
+    expect(snapped.segments[1].endSec).toBeCloseTo(base.segments[1].endSec, 3);
+    expect(snapped.durationSec).toBeCloseTo(base.durationSec + 0.08, 3);
+    // Captions sit on the compressed timeline: the later segment starts 0.08 s
+    // earlier in source, so its words land 0.08 s later in the output.
+    expect(snapped.words[2].startSec).toBeCloseTo(base.words[2].startSec + 0.08, 3);
+  });
+
   it("remaps words onto the compressed output timeline", () => {
     const plan = computeJumpCut(words.map((word) => ({ ...word, timingSource: "aligned" as const })), 10, 16.5);
     const [, , w3] = plan.words;

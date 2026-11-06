@@ -519,6 +519,12 @@ export interface ExportOptions {
    * close pieces are untouched.
    */
   colorMatch?: boolean;
+  /**
+   * Snap jump-cut boundaries onto the background music's beat grid (backward
+   * only, into silence the cut already removes). No BGM means no effect.
+   * Default on.
+   */
+  beatSync?: boolean;
   /** 说话人标签:多说话人切片换人时字幕行首加彩色「A:」(开了多人对谈才有标注)。 */
   speakerLabels?: boolean;
   /** 模板受控微扰:按切片种子小幅抖动字幕几何,批量出片不共享模板指纹。 */

@@ -8,6 +8,7 @@
  * Pure functions — ffmpeg execution lives in cut.ts.
  */
 import type { TranscriptWord } from "../shared/api-types";
+import { planBeatSnap } from "./beat";
 import { peakInRange, type PeakTrack } from "./audio-peaks";
 import { hasSpeechInRange, speechAnchorBounds, type SpeechActivitySpan } from "./speech-activity";
 
@@ -52,6 +53,14 @@ export interface JumpCutOptions {
    * independent local signal still detects speech (for example an ASR miss).
    */
   speechSpans?: SpeechActivitySpan[];
+  /**
+   * Music-bed beat grid (absolute source seconds). Kept-piece starts are pulled
+   * BACK onto the nearest beat so a jump cut lands on the music; a backward
+   * shift only eats silence the cut was already removing. Absent = no snapping.
+   */
+  beats?: number[];
+  /** Largest backward snap (seconds). Default 0.12 — inaudible on speech. */
+  beatMaxShiftSec?: number;
 }
 
 /** Subtract cut spans from kept segments (interval difference). Pure. */
@@ -175,6 +184,11 @@ export function computeJumpCut(
   // "filled back" by the short-cut smoothing pass
   segments = mergeShortCuts(segments);
   segments = subtractSpans(segments, forceCutSpans);
+  // Beat snap runs before the word remap below, so captions, breaks, duration
+  // and the removed-time receipt all follow the snapped timeline.
+  if (options.beats && options.beats.length > 0) {
+    segments = planBeatSnap(segments, options.beats, options.beatMaxShiftSec ?? 0.12).segments;
+  }
 
   const durationSec = segments.reduce((acc, s) => acc + (s.endSec - s.startSec), 0);
   const removedSec = clipEndSec - clipStartSec - durationSec;
