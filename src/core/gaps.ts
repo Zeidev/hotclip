@@ -61,6 +61,12 @@ export interface JumpCutOptions {
   beats?: number[];
   /** Largest backward snap (seconds). Default 0.12 — inaudible on speech. */
   beatMaxShiftSec?: number;
+  /**
+   * Cross-fade between kept pieces (seconds). 0/unset = hard cut (legacy
+   * graph). The output is shorter by `transitionSec * (pieces - 1)`, so the word
+   * remap and duration below already account for it.
+   */
+  transitionSec?: number;
 }
 
 /** Subtract cut spans from kept segments (interval difference). Pure. */
@@ -143,6 +149,7 @@ export function computeJumpCut(
   const { peaks, silenceThreshold = SILENCE_PEAK_THRESHOLD, forceCutSpans = [], gapThresholdSec = GAP_THRESHOLD_SEC, protectedSpans = [], breathPadSec = 0, speechSpans } = options;
   // 呼吸口加在语音尾部:剪掉的区间相应缩短,句尾多留一口气
   const padAfter = PAD_AFTER_SEC + Math.max(0, breathPadSec);
+  const transitionSec = Math.max(0, options.transitionSec ?? 0);
   const inClip = words.filter((w) => w.endSec > clipStartSec && w.startSec < clipEndSec);
   if (inClip.length === 0) {
     const full = { startSec: clipStartSec, endSec: clipEndSec };
@@ -190,7 +197,10 @@ export function computeJumpCut(
     segments = planBeatSnap(segments, options.beats, options.beatMaxShiftSec ?? 0.12).segments;
   }
 
-  const durationSec = segments.reduce((acc, s) => acc + (s.endSec - s.startSec), 0);
+  const durationSec = Math.max(
+    0,
+    segments.reduce((acc, s) => acc + (s.endSec - s.startSec), 0) - transitionSec * Math.max(0, segments.length - 1)
+  );
   const removedSec = clipEndSec - clipStartSec - durationSec;
 
   // Remap words onto the compressed output timeline.
@@ -212,7 +222,7 @@ export function computeJumpCut(
         });
       }
     }
-    outOffset += seg.endSec - seg.startSec;
+    outOffset += seg.endSec - seg.startSec - (si < segments.length - 1 ? transitionSec : 0);
   }
   return {
     segments, words: remapped, breaks, removedSec, durationSec,

@@ -127,6 +127,12 @@ export interface CutOptions {
    */
   punchIn?: { width: number; height: number; scale?: number };
   /**
+   * Cross-fade between kept pieces (seconds). 0/unset = the legacy hard-cut
+   * `concat` graph. The spliced picture and audio shrink by
+   * `transitionSec * (pieces - 1)`, which `computeJumpCut` already accounts for.
+   */
+  transitionSec?: number;
+  /**
    * Jump-cut only: per-piece colour correction against the first kept piece.
    * One entry per segment (null = leave it alone). Empty/absent changes nothing.
    */
@@ -427,7 +433,30 @@ export function buildJumpCutArgs(
     ...muteRangeFilters(options.muteRanges),
   ];
   const audioOut = audioChain.length > 0 ? "[araw]" : "[aout]";
-  parts.push(`${labels.join("")}concat=n=${segments.length}:v=1:a=1${concatOut}${audioOut}`);
+  const transition = Math.max(0, Math.min(options.transitionSec ?? 0, 0.5));
+  if (transition > 0 && segments.length > 1) {
+    // Cross-fade chain: xfade overlaps picture, acrossfade overlaps audio, and
+    // both shorten the timeline by the same amount, so they stay in sync.
+    const durations = segments.map((s) => Math.max(0, s.endSec - s.startSec));
+    let videoLabel = "[v0]";
+    let audioLabel = "[a0]";
+    let cumulative = durations[0];
+    for (let i = 1; i < segments.length; i++) {
+      const last = i === segments.length - 1;
+      const offset = Math.max(0, cumulative - transition).toFixed(3);
+      parts.push(
+        `${videoLabel}[v${i}]xfade=transition=fade:duration=${transition.toFixed(3)}:offset=${offset}${last ? concatOut : `[vx${i}]`}`
+      );
+      parts.push(
+        `${audioLabel}[a${i}]acrossfade=d=${transition.toFixed(3)}:c1=tri:c2=tri${last ? audioOut : `[ax${i}]`}`
+      );
+      videoLabel = `[vx${i}]`;
+      audioLabel = `[ax${i}]`;
+      cumulative += durations[i] - transition;
+    }
+  } else {
+    parts.push(`${labels.join("")}concat=n=${segments.length}:v=1:a=1${concatOut}${audioOut}`);
+  }
   if (wm) {
     // 水印永远最后叠(在字幕之上):后处理链 → [vmain],movie 源 → [wm],overlay 收口
     const s = watermarkStages(wm);

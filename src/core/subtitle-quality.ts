@@ -35,6 +35,7 @@ export function lintSubtitleTimeline(
   const issues: SubtitleQualityIssue[] = [];
   const maxUnits = captionMaxLineUnits(style, layout);
   const ordered = [...words].sort((a, b) => a.startSec - b.startSec);
+  const overlapTolerance = Math.max(OVERLAP_TOLERANCE_SEC, options.overlapToleranceSec ?? 0);
 
   for (const word of ordered) {
     if (!Number.isFinite(word.startSec) || !Number.isFinite(word.endSec) || word.endSec <= word.startSec) {
@@ -52,7 +53,7 @@ export function lintSubtitleTimeline(
     const previous = ordered[index - 1];
     const word = ordered[index];
     const overlap = previous.endSec - word.startSec;
-    if (overlap > OVERLAP_TOLERANCE_SEC) {
+    if (overlap > overlapTolerance) {
       issues.push({
         code: "overlap",
         severity: "error",

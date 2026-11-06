@@ -350,6 +350,11 @@ export interface ExportRenderOptions {  /** Center-crop reframe to 9:16 (1080×1
    * 要剪掉的静音),没有 BGM 时无效果。默认开。
    */
   beatSync?: boolean;
+  /**
+   * 片间交叉淡化(秒)。0/缺省 = 硬切(历史行为);开启后成片按每处淡化缩短,
+   * computeJumpCut 已把这段时长计入字幕与回执。
+   */
+  transitionSec?: number;
   /** 说话人标签:多说话人切片换人时字幕行首加彩色「A:」(词表带标注才生效)。 */
   speakerLabels?: boolean;
   /** 模板受控微扰:按切片种子小幅抖动字幕几何(字号/基线),批量出片不共享模板指纹。 */
@@ -828,6 +833,7 @@ export async function exportClips(
             beats: options.bgmPath && options.beatSync !== false
               ? await bgmBeatGrid(options.bgmPath, signal)
               : undefined,
+            transitionSec: options.transitionSec,
           });
           if (speechActivity && speechSpans) speechActivity.protectedGaps = plan.speechProtectedGaps ?? 0;
         }
@@ -857,7 +863,12 @@ export async function exportClips(
         : undefined;
       const assStyle: CaptionStyle = isWebCaptionStyle(options.captionStyle) ? "keyword" : (options.captionStyle ?? "keyword");
       const subtitleQuality = wantCaptions
-        ? lintSubtitleTimeline(captionWords!, layout, assStyle, plan?.breaks, clip.keywords, { readability: true, endSec: captionShift + clipDuration })
+        ? lintSubtitleTimeline(captionWords!, layout, assStyle, plan?.breaks, clip.keywords, {
+            readability: true,
+            endSec: captionShift + clipDuration,
+            // A cross-faded splice overlaps captions by the transition length.
+            overlapToleranceSec: Math.max(0.05, (options.transitionSec ?? 0) + 0.05),
+          })
         : null;
       // Opening hook: burn the AI teaser (悬念句) big in the upper third for the
       // clip's first seconds — this is what the teaser was generated for.
@@ -1044,6 +1055,7 @@ export async function exportClips(
               encoder: videoEncoder,
               punchIn,
               colorMatch: options.colorMatch !== false,
+              transitionSec: options.transitionSec,
               audiogram: audioOnly ? audiogramSpec(Boolean(options.vertical), options.brand?.highlightColor) : undefined,
             },
           })
@@ -1095,7 +1107,7 @@ export async function exportClips(
           const pieceGrade = options.colorMatch !== false && !audioOnly
             ? planPieceColorGrades(await measurePieceColors(inputPath, baseSegments, signal))
             : undefined;
-          await cutJumpClip(inputPath, cutTarget, clip.startSec, baseSegments, { ...cutOptions, punchIn, pieceGrade }, signal, onTimeSec);
+          await cutJumpClip(inputPath, cutTarget, clip.startSec, baseSegments, { ...cutOptions, punchIn, pieceGrade, transitionSec: options.transitionSec }, signal, onTimeSec);
         } else {
           // Single kept segment: copy H.264 video only when its start is proven
           // keyframe-aligned and no pixel-changing filter is active.

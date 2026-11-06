@@ -525,6 +525,11 @@ export interface ExportOptions {
    * Default on.
    */
   beatSync?: boolean;
+  /**
+   * Cross-fade between jump-cut pieces (seconds). 0/unset keeps the hard cut;
+   * the export shortens by this much per splice and captions follow.
+   */
+  transitionSec?: number;
   /** 说话人标签:多说话人切片换人时字幕行首加彩色「A:」(开了多人对谈才有标注)。 */
   speakerLabels?: boolean;
   /** 模板受控微扰:按切片种子小幅抖动字幕几何,批量出片不共享模板指纹。 */

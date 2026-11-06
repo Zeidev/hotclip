@@ -172,6 +172,21 @@ describe("buildCutArgs", () => {
     expect(graph.match(/eq=brightness=/g)).toHaveLength(1);
   });
 
+  it("cross-fades pieces when a transition is requested", () => {
+    const args = buildJumpCutArgs(
+      "/i.mp4", "/o.mp4", 0,
+      [{ startSec: 0, endSec: 2 }, { startSec: 3, endSec: 5 }, { startSec: 6, endSec: 8 }],
+      { transitionSec: 0.1 }
+    );
+    const graph = args[args.indexOf("-filter_complex") + 1];
+    // 2s pieces: first xfade starts at 2-0.1, second at (2-0.1)+2-0.1.
+    expect(graph).toContain("xfade=transition=fade:duration=0.100:offset=1.900");
+    expect(graph).toContain("xfade=transition=fade:duration=0.100:offset=3.800");
+    expect(graph.match(/acrossfade=d=0\.100/g)).toHaveLength(2);
+    // The hard-cut concat path is not used at all.
+    expect(graph).not.toContain("concat=n=3");
+  });
+
   it("keeps undefined and explicit SDR color plans on the legacy argument path", () => {
     const legacy = buildCutArgs("/i.mp4", "/o.mp4", 0, 5, { mode: "copy" });
     const sdr = buildCutArgs("/i.mp4", "/o.mp4", 0, 5, { mode: "copy", color: colorPlan("sdr") });

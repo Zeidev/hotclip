@@ -125,7 +125,15 @@ export function captionReadableChars(text: string): number {
   return Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)).filter((part) => !/^\s+$/u.test(part.segment)).length;
 }
 
-export interface CaptionReadabilityOptions { readability?: boolean; endSec?: number }
+export interface CaptionReadabilityOptions {
+  readability?: boolean;
+  endSec?: number;
+  /**
+   * Overlap warning floor. Cross-faded jump cuts legitimately overlap captions
+   * by the transition length, so the caller raises this when one is in use.
+   */
+  overlapToleranceSec?: number;
+}
 export interface PlannedCaptionLine { words: TranscriptWord[]; startSec: number; endSec: number; maxCps: number }
 
 /** Only display events change: speech/karaoke word timestamps remain intact.

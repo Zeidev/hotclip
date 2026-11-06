@@ -37,6 +37,14 @@ describe("computeJumpCut", () => {
     expect(snapped.words[2].startSec).toBeCloseTo(base.words[2].startSec + 0.08, 3);
   });
 
+  it("cross-fade shortens the output and shifts later words", () => {
+    const base = computeJumpCut(words, 10, 16.5);
+    const faded = computeJumpCut(words, 10, 16.5, { transitionSec: 0.1 });
+    expect(faded.segments).toEqual(base.segments);
+    expect(faded.durationSec).toBeCloseTo(base.durationSec - 0.1, 3);
+    expect(faded.words[2].startSec).toBeCloseTo(base.words[2].startSec - 0.1, 3);
+  });
+
   it("remaps words onto the compressed output timeline", () => {
     const plan = computeJumpCut(words.map((word) => ({ ...word, timingSource: "aligned" as const })), 10, 16.5);
     const [, , w3] = plan.words;
