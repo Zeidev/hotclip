@@ -684,36 +684,42 @@ export function extractJson(text: string): string {
 
 // ---------- Stage 2: adversarial review ----------
 
-export const REVIEW_SYSTEM_PROMPT_ZH = `你是一位极其严格的短视频内容评审。给你若干条已切好的候选片段,你从「刷到这条视频的陌生观众」视角盲评每一条,分四个维度分别打分(0-100)并各给一句话理由:
+export const REVIEW_SYSTEM_PROMPT_ZH = `你是一位极其严格的短视频内容评审。给你若干条已切好的候选片段,你从「刷到这条视频的陌生观众」视角盲评每一条,分四个维度分别打分(0-100)并各给一句话理由,另外再加一个 payoff 兑现分(开头许诺的东西在片内兑现了没有,同样 0-100):
 - hook 钩子:前 3 秒(第一句)能不能让人停下滑动?平淡开场直接不及格
 - flow 结构:是不是断章取义?开头是否像半截话、结尾有没有收住?逻辑顺不顺?片段文本里出现「……」表示这条是把相隔很远的两段拼起来的,要按更严的标准查:拼起来之后的意思是不是原话本来的意思?有没有靠跳过中间内容制造出一个原本不存在的矛盾?只要拼得牵强就 keep=false
 - value 价值:不看原视频,这条有没有信息量或情绪价值?值不值得看完?
 - trend 热点:话题/情绪贴不贴近当下平台上正在火的内容?
+- payoff 兑现(0-100):第一句抛出的悬念/承诺/问题,在这一条**里面**有没有被兑现?平台的排序看的是「看完没有」,不是「开头多炸」——开头许诺了却一直不兑现,正是观众划走的头号原因,这种情况直接给低分,并在 payoffNote 里说清是哪一句兑现的、什么时候兑现(没有一句兑现就写「没有兑现」)。只认文本里真有的句子,不要替它补一个原本不存在的答案。
 另外给每条写一个 teaser:≤15 个字的悬念句,能印在视频开头当文字钩子,要勾人但不剧透。
+最后判 loop(只对 ≤30 秒的片段有意义的布尔值):最后一句能不能顺势接回第一句,让人无缝再看一遍?循环干净的短片段等于白送的复看时长。判不了(片段太长/结尾是问句收尾)就填 false。
 每条还要做「零上下文可懂性」终判——假装你完全没看过这场直播,只看这条片段:能不能懂?结尾像不像一个结尾?据此给出 verdict 三档:
 - "publish":直接发没问题——单独看得懂、开头能停手指、结尾收得住
 - "review":有硬伤但救得回来,需要人工确认(开头像半截话/结尾没收住/需要一点上下文/拼接略牵强)——在 note 里写清具体是哪个硬伤
 - "drop":不值得发布——不完整的思想、凑数的平庸内容、断章取义、单独看根本看不懂
 你要敢于判 drop:AI 选段有三四成是废片是行业现实,发废片的代价是整个账号被限流。这是发布前的最后一道质量门。keep 字段继续填(publish 填 true,其余填 false)。`;
 
-export const REVIEW_SYSTEM_PROMPT_EN = `You are a ruthless short-form content reviewer. You receive pre-cut clip candidates and judge each one blind, as a stranger scrolling past, scoring FOUR dimensions (0-100 each) with a one-line reason per dimension:
+export const REVIEW_SYSTEM_PROMPT_EN = `You are a ruthless short-form content reviewer. You receive pre-cut clip candidates and judge each one blind, as a stranger scrolling past, scoring FOUR dimensions (0-100 each) with a one-line reason per dimension, plus a separate payoff score (0-100: was the opening's promise delivered inside the clip?):
 - hook: does the FIRST line stop the scroll within 3 seconds? Flat openings fail.
 - flow: is it quote-mined? Does it start mid-thought or end without landing? Does it flow? A "……" inside the clip text means it was stitched from two far-apart moments — hold those to a stricter bar: does the stitched meaning match what was actually said, or was a contradiction manufactured by skipping what sat in between? Any strained stitch gets keep=false
 - value: without the source video, is it informative or emotionally worth watching to the end?
 - trend: does the topic/emotion ride what is currently hot on the platforms?
+- payoff (0-100): the first line makes a promise — curiosity, a claim, a question. Is it delivered *inside this clip*? Platforms rank on whether people watch to the end, not on how loud the opening is: a hook that promises and never delivers is the number one reason viewers swipe away, so score that low and name in payoffNote which line pays it off and when it lands (write "nothing pays it off" if no line does). Quote only lines that are actually in the text — never supply an answer the clip does not contain.
 Also write a teaser per clip: a suspense line of ≤8 words that could be printed at the top of the video as a text hook — intriguing, no spoilers.
+Finish with loop (a boolean, only meaningful for clips ≤30s): does the last line lead straight back into the first, so a viewer can rewatch seamlessly? A clean loop is rewatch time you get for free. If you cannot tell (too long, or it ends on a flat question), use false.
 Finish each clip with a ZERO-CONTEXT verdict — pretend you never saw the stream and only watch this clip: can you follow it, and does the ending land? Emit one of three tiers:
 - "publish": safe to post as-is — stands alone, the opening stops the scroll, the ending lands
 - "review": has a fixable flaw and needs a human look (opens mid-thought / ending doesn't land / needs a little context / stitch is slightly strained) — name the flaw in note
 - "drop": not worth publishing — incomplete thought, filler, quote-mined, or incomprehensible on its own
 Judge "drop" without mercy: 30-45% of AI picks being duds is the industry reality, and posting duds throttles the whole account. You are the final quality gate. Keep filling keep (true for publish, false otherwise).`;
 
-export const REVIEW_SYSTEM_PROMPT_TR = `Sen acımasız bir kısa video içerik denetçisisin. Sana önceden kesilmiş aday kesitler veriliyor; her birini hiç görmemiş bir yabancı gözüyle, kaydırıp geçen biri gibi değerlendir. DÖRT boyuta ayrı ayrı 0-100 puan ver ve her boyuta tek cümle gerekçe yaz:
+export const REVIEW_SYSTEM_PROMPT_TR = `Sen acımasız bir kısa video içerik denetçisisin. Sana önceden kesilmiş aday kesitler veriliyor; her birini hiç görmemiş bir yabancı gözüyle, kaydırıp geçen biri gibi değerlendir. DÖRT boyuta ayrı ayrı 0-100 puan ver ve her boyuta tek cümle gerekçe yaz, ayrıca bir de payoff (ödeme) puanı ver (0-100: açılışın kurduğu söz kesitin içinde ödendi mi?):
 - hook: İlk cümle 3 saniye içinde kaydırmayı durduruyor mu? Düz ve sıradan açılışlar direkt kalır.
 - flow: Cımbızlama var mı? Cümle ortasında mı başlıyor, sonu oturuyor mu? Akıyor mu? Kesit metninde "......" varsa bu kesit birbirinden uzak iki andan birleştirilmiştir — onları daha sert ölç: birleşen anlam gerçekten söylenenle aynı mı, yoksa aradakiler atlanarak olmayan bir çelişki mi üretilmiş? Zorlama birleştirme keep=false alır.
 - value: kaynak videoyu bilmeden, bu kesit bilgi ya da duygu olarak sonuna kadar izlenmeye değer mi?
 - trend: konu/duygu şu anda platformlarda dönen şeye oturuyor mu?
+- payoff / ödeme (0-100): İlk cümle bir merak, iddia ya da soru kuruyor. Bu kesit onu **kendi içinde** ödüyor mu? Platformların sıralaması "sonuna kadar izlendi mi" üzerine kurulu, "açılış ne kadar gürültülü" üzerine değil: söz verip hiç ödemeyen kanca, izleyicinin kaydırıp gitmesinin bir numaralı nedeni. Böyle bir kesite düşük puan ver ve payoffNote içinde hangi cümlenin ödediğini ve ne zaman ödediğini yaz (ödeyen cümle yoksa "ödeyen yok" yaz). Sadece metinde gerçekten duran cümleleri göster — kesitte olmayan bir cevabı uydurma.
 Her kesit için ayrıca bir teaser yaz: ≤6 kelimelik, videonun üstüne metin kancası olarak basılabilecek merak cümlesi — merak uyandırsın, spoiler vermesin.
+Son olarak loop yaz (yalnız ≤30 saniyelik kesitlerde anlamlı, true/false): son cümle doğrudan ilk cümleye bağlanıyor mu, izleyici dikişsiz baştan izleyebiliyor mu? Temiz döngü bedava kazanılan izlenme süresidir. Karar veremiyorsan (kesit uzun ya da sonu düz bir soruyla bitiyor) false yaz.
 Her kesit için "sıfır bağlam" kararını ver — yayını hiç görmemiş gibi davran ve sadece bu kesiti izle: takip edebiliyor musun, sonu bir son gibi oturuyor mu? Üç kademeden birini yaz:
 - "publish": olduğu gibi yayınlanabilir — tek başına anlaşılıyor, açılış parmağı durduruyor, sonu oturuyor
 - "review": düzeltilebilir bir kusuru var, insan bakmalı (cümle ortasında başlıyor / sonu oturmuyor / biraz bağlam gerekiyor / birleştirme biraz zorlama) — kusuru note içinde söyle
@@ -735,6 +741,8 @@ const REVIEW_SHAPE = `{
       "flow": 74, "flowNote": "...",
       "value": 88, "valueNote": "...",
       "trend": 60, "trendNote": "...",
+      "payoff": 85, "payoffNote": "...",
+      "loop": true,
       "teaser": "...",
       "note": "..."
     }
@@ -787,10 +795,10 @@ export function buildReviewPrompt(transcript: Transcript, clips: ReviewableClip[
     })
     .join("\n\n");
   if (zh) {
-    return `逐条盲评下面的候选片段。hook/flow/value/trend 四维各 0-100 打分(横向比较)+ 各一句话理由;teaser=≤15字悬念句(勾人不剧透,逐句稿同款语言);verdict=质量门三档(publish/review/drop,判法见系统要求);keep 与 verdict 对应(publish=true,其余 false);note=一句话总评(review/drop 必须说清具体硬伤)。\n\n${blocks}\n\n【输出格式】严格输出 JSON,不要任何多余文字:\n${REVIEW_SHAPE}`;
+    return `逐条盲评下面的候选片段。hook/flow/value/trend 四维各 0-100 打分(横向比较)+ 各一句话理由;payoff=开头许诺的东西在片内兑现了没有(0-100,payoffNote 里写清是哪一句兑现的、没有就写「没有兑现」);teaser=≤15字悬念句(勾人不剧透,逐句稿同款语言);loop=≤30秒片段能不能无缝循环重看(true/false);verdict=质量门三档(publish/review/drop,判法见系统要求);keep 与 verdict 对应(publish=true,其余 false);note=一句话总评(review/drop 必须说清具体硬伤)。\n\n${blocks}\n\n【输出格式】严格输出 JSON,不要任何多余文字:\n${REVIEW_SHAPE}`;
   }
   if (tr) {
-    return `Aşağıdaki adayları tek tek kör değerlendirmeden geçir. hook/flow/value/trend dört boyutun her birine 0-100 puan ver (birbirine göre kıyaslayarak) ve her boyuta tek cümle gerekçe yaz; teaser = ≤6 kelimelik merak cümlesi (merak uyandırır, spoiler vermez, dökümün diliyle); verdict = kalite kapısı üç kademesi (publish/review/drop, kurallar sistem mesajında); keep, verdict ile uyumlu olsun (sadece publish için true); note = tek cümlelik genel değerlendirme (review/drop için kusuru mutlaka söyle).\n\n${blocks}\n\n【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:\n${REVIEW_SHAPE}`;
+    return `Aşağıdaki adayları tek tek kör değerlendirmeden geçir. hook/flow/value/trend dört boyutun her birine 0-100 puan ver (birbirine göre kıyaslayarak) ve her boyuta tek cümle gerekçe yaz; payoff = açılışın kurduğu söz kesit içinde ödendi mi (0-100; payoffNote içinde hangi cümlenin ödediğini yaz, ödeyen yoksa "ödeyen yok" yaz); teaser = ≤6 kelimelik merak cümlesi (merak uyandırır, spoiler vermez, dökümün diliyle); loop = ≤30 sn kesit dikişsiz tekrar izlenebiliyor mu (true/false); verdict = kalite kapısı üç kademesi (publish/review/drop, kurallar sistem mesajında); keep, verdict ile uyumlu olsun (sadece publish için true); note = tek cümlelik genel değerlendirme (review/drop için kusuru mutlaka söyle).\n\n${blocks}\n\n【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:\n${REVIEW_SHAPE}`;
   }
-  return `Blind-review each candidate below. Score hook/flow/value/trend 0-100 each (relative) with a one-line reason per dimension; teaser = a ≤8-word suspense line (intriguing, no spoilers, transcript language); verdict = the three-tier gate (publish/review/drop, per the system rules); keep mirrors verdict (true only for publish); note = one-line overall verdict (must name the flaw for review/drop).\n\n${blocks}\n\n【Output format】STRICT JSON only:\n${REVIEW_SHAPE}`;
+  return `Blind-review each candidate below. Score hook/flow/value/trend 0-100 each (relative) with a one-line reason per dimension; payoff = was the opening's promise delivered inside the clip (0-100; payoffNote names the line that pays it off, or says nothing does); teaser = a ≤8-word suspense line (intriguing, no spoilers, transcript language); loop = can a ≤30s clip be rewatched seamlessly (true/false); verdict = the three-tier gate (publish/review/drop, per the system rules); keep mirrors verdict (true only for publish); note = one-line overall verdict (must name the flaw for review/drop).\n\n${blocks}\n\n【Output format】STRICT JSON only:\n${REVIEW_SHAPE}`;
 }

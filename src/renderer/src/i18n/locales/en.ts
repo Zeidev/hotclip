@@ -359,6 +359,8 @@ export const en = {
     dimFlow: "Flow",
     dimValue: "Value",
     dimTrend: "Trend",
+    dimPayoff: "Payoff",
+    loopBadge: "Seamless loop",
     teaserLabel: "Teaser",
     reviewOpen: "Preview & review",
     reviewOpenHint: "Play this clip and drag the timeline handles to fine-tune cut points word by word",

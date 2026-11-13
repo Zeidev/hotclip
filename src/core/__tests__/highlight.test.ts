@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { normalizeText, buildTokenIndex, matchQuote, resolveSelection } from "../highlight/match";
-import { parseSelections, dropOverlaps, parseReviews, applyReviews, normalizeScores, clipLengthBounds, mergeProductKeywords } from "../highlight/detect";
+import { parseSelections, dropOverlaps, parseReviews, applyReviews, normalizeScores, clipLengthBounds, mergeProductKeywords, PAYOFF_FLOOR } from "../highlight/detect";
 import {
   buildHighlightPrompt,
   buildMomentPrompt,
@@ -190,6 +190,76 @@ describe("parseReviews / applyReviews", () => {
   });
 });
 
+describe("hook 兑现 ve loop(v0.34)", () => {
+  const base = {
+    startSec: 0, endSec: 10, text: "", title: "", hook: "", reason: "",
+    boundary: "exact" as const, keywords: [], recommended: true, reviewNote: "",
+  };
+
+  it("payoff ve loop alanlarını okur, boolean olmayan loop'u yok sayar", () => {
+    const out = parseReviews(
+      '{"reviews":[{"id":1,"verdict":"publish","payoff":30,"payoffNote":"ödeyen yok","loop":false},{"id":2,"verdict":"publish","payoff":90,"loop":"true"}]}'
+    );
+    expect(out[0].payoff).toBe(30);
+    expect(out[0].payoffNote).toBe("ödeyen yok");
+    expect(out[0].loop).toBe(false);
+    expect(out[1].payoff).toBe(90);
+    expect(out[1].loop).toBeUndefined(); // 字符串 "true" 不猜
+  });
+
+  it("ödenmeyen kancayı publish'ten düşürür ve gerekçeyi yazar", () => {
+    const out = applyReviews(
+      [{ ...base, id: 1, score: 90 }],
+      [{ id: 1, keep: true, gate: "publish", score: 90, note: "kanca güçlü", payoff: 30, payoffNote: "kesitte ödeyen cümle yok" }],
+      "tr"
+    );
+    expect(out[0].gate).toBe("review");
+    expect(out[0].recommended).toBe(false);
+    expect(out[0].payoff).toBe(30);
+    expect(out[0].gateNotes?.[0]).toBe("kanca güçlü");
+    expect(out[0].gateNotes?.[1]).toContain("Açılışın sözü tutulmuyor(30/100)");
+    expect(out[0].gateNotes?.[1]).toContain("kesitte ödeyen cümle yok");
+  });
+
+  it("sınırda veya eksik payoff'a dokunmaz", () => {
+    const out = applyReviews(
+      [{ ...base, id: 1, score: 90 }, { ...base, id: 2, score: 88 }],
+      [
+        { id: 1, keep: true, gate: "publish", score: 90, note: "", payoff: PAYOFF_FLOOR },
+        { id: 2, keep: true, gate: "publish", score: 88, note: "" },
+      ],
+      "en"
+    );
+    expect(out[0].gate).toBe("publish");
+    expect(out[0].recommended).toBe(true);
+    expect(out[1].gate).toBe("publish");
+    expect(out[1].payoff).toBeUndefined();
+  });
+
+  it("drop 档ı yukarı da aşağı da çekmez", () => {
+    const out = applyReviews(
+      [{ ...base, id: 1, score: 20 }],
+      [{ id: 1, keep: false, gate: "drop", score: 20, note: "凑数", payoff: 10 }],
+      "en"
+    );
+    expect(out[0].gate).toBe("drop");
+    expect(out[0].gateNotes).toEqual(["凑数"]); // 已经是 drop,不重复贴理由
+  });
+
+  it("yalnız kısa ve dikişsiz döngülü kesite puan ekler", () => {
+    const out = applyReviews(
+      [{ ...base, id: 1, endSec: 25, score: 80 }, { ...base, id: 2, endSec: 90, score: 80 }],
+      [
+        { id: 1, keep: true, gate: "publish", score: 80, note: "", loop: true },
+        { id: 2, keep: true, gate: "publish", score: 80, note: "", loop: true },
+      ],
+      "zh"
+    );
+    expect(out[0].score).toBe(84);
+    expect(out[1].score).toBe(80);
+  });
+});
+
 describe("normalizeScores", () => {
   const base = {
     startSec: 0, endSec: 10, text: "", title: "", hook: "", reason: "",
@@ -270,6 +340,18 @@ describe("prompt builders", () => {
     expect(isMultiSpeaker(one)).toBe(false);
     expect(renderTranscriptLines(one)).not.toContain("S1:");
     expect(buildHighlightPrompt(one)).not.toContain("多人对谈");
+  });
+
+  it("review prompt asks for payoff and loop (zh + en)", () => {
+    expect(reviewSystemPrompt(tx)).toContain("payoff 兑现");
+    expect(reviewSystemPrompt(tx)).toContain("loop(只对 ≤30 秒的片段有意义");
+    const zhUser = buildReviewPrompt(tx, [{ id: 1, title: "钩子", startSec: 0, endSec: 4, text: "第一句。" }]);
+    expect(zhUser).toContain("payoff=");
+    expect(zhUser).toContain("loop=≤30秒片段");
+    const en = { ...tx, language: "en" };
+    expect(reviewSystemPrompt(en)).toContain("payoff (0-100)");
+    expect(reviewSystemPrompt(en)).toContain("loop (a boolean");
+    expect(buildReviewPrompt(en, [{ id: 1, title: "hook", startSec: 0, endSec: 4, text: "First." }])).toContain("loop = can a ≤30s clip");
   });
 });
 
@@ -377,6 +459,16 @@ describe("Türkçe prompt yolu", () => {
     const p = buildReviewPrompt(trTx, [{ id: 1, title: "İndirim çelişkisi", startSec: 0, endSec: 12, text: trTx.segments.map((s) => s.text).join(" ") }]);
     expect(p).toContain("【Aday 1】");
     expect(p).toContain("Öncesi:");
+  });
+
+  it("Türkçe denetçi payoff ve loop da ister", () => {
+    const sys = reviewSystemPrompt(trTx);
+    expect(sys).toContain("payoff / ödeme (0-100)");
+    expect(sys).toContain("ödemeyen kanca");
+    expect(sys).toContain("Son olarak loop yaz");
+    const p = buildReviewPrompt(trTx, [{ id: 1, title: "İndirim çelişkisi", startSec: 0, endSec: 12, text: trTx.segments.map((s) => s.text).join(" ") }]);
+    expect(p).toContain("payoffNote");
+    expect(p).toContain("loop = ≤30 sn kesit dikişsiz");
   });
 });
 

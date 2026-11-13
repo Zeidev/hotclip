@@ -17,6 +17,7 @@ import {
   CLIP_LENGTH_RANGES,
   isChineseTranscript,
   promptLanguage,
+  type PromptLang,
   momentSystemPrompt,
   buildMomentPrompt,
 } from "./prompt";
@@ -426,10 +427,30 @@ export interface ReviewVerdict {
   dims?: ScoreDims;
   dimNotes?: { hook: string; flow: string; value: string; trend: string };
   teaser?: string;
+  /** 兑现分(v0.34):开头许诺的东西在片内有没有兑现,0-100。缺省=老模型没吐。 */
+  payoff?: number;
+  /** 兑现说明:哪一句兑现的(或「没有兑现」)。 */
+  payoffNote?: string;
+  /** 无缝循环(只对 ≤30 秒片段有意义);缺省=模型没判。 */
+  loop?: boolean;
 }
 
 /** Hook rules the scroll; trend is the softest signal. */
 const DIM_WEIGHTS: ScoreDims = { hook: 0.35, flow: 0.25, value: 0.25, trend: 0.15 };
+
+/**
+ * 兑现分下限(v0.34):低于此分说明开头抛的悬念/承诺在片内一直没落地。
+ * 平台排序看的是「看完没有」,开头许诺不兑现正是划走的头号原因——所以
+ * 这类片段从 publish 档降级到 review 档(只降不 drop,与 gate.ts 同规矩,
+ * fail-open:模型没吐 payoff 就完全不干预)。
+ */
+export const PAYOFF_FLOOR = 45;
+
+/** ≤此秒数的片段才判循环(30 秒以内一条就看完,复看几乎无成本)。 */
+const LOOP_MAX_SEC = 30;
+
+/** 循环干净的短片段加分:复看是白送的观看时长(排序看观看时长/次曝光)。 */
+const LOOP_BOOST = 4;
 
 /** Weighted composite of the four dimensions, 0-100. */
 export function compositeScore(dims: ScoreDims): number {
@@ -485,28 +506,57 @@ export function parseReviews(content: string): ReviewVerdict[] {
           }
         : undefined,
       teaser: String(v.teaser ?? "").trim().slice(0, 30) || undefined,
+      // 兑现分:只在真吐了数字时收(缺省=老模型,不干预降级判断)
+      payoff: Number.isFinite(Number(v.payoff)) ? clamp(v.payoff) : undefined,
+      payoffNote: String(v.payoffNote ?? "").trim() || undefined,
+      // 循环:只收真正的布尔值("false"/"no" 这类字符串不猜,宁可不加分)
+      loop: typeof v.loop === "boolean" ? v.loop : undefined,
     });
   }
   return out;
 }
 
 /** Merge verdicts onto candidates. Unreviewed ids stay recommended (fail-open). */
-export function applyReviews(candidates: HighlightCandidate[], reviews: ReviewVerdict[]): HighlightCandidate[] {
+export function applyReviews(
+  candidates: HighlightCandidate[],
+  reviews: ReviewVerdict[],
+  lang: PromptLang = "en"
+): HighlightCandidate[] {
   const byId = new Map(reviews.map((r) => [r.id, r]));
+  // 降级理由要给人看懂,所以跟着转写语言走(与 prompt.ts 同一套判断)
+  const unpaidLabel = lang === "zh" ? "开头许诺未兑现" : lang === "tr" ? "Açılışın sözü tutulmuyor" : "hook promise never paid off";
   return candidates.map((c) => {
     const r = byId.get(c.id);
     if (!r) return c;
+    const gateNotes = r.note ? [r.note] : [];
+    // 兑现分不及线:从 publish 降到 review(只降不 drop,与 gate.ts 同规矩)。
+    // 依据:平台排序看观看完成度,开头许诺不兑现的片段正是划走的主要来源。
+    let gate: GateTier = r.gate;
+    if (r.payoff !== undefined && r.payoff < PAYOFF_FLOOR && gate === "publish") {
+      gate = "review";
+      gateNotes.push(
+        r.payoffNote ? `${unpaidLabel}(${r.payoff}/100):${r.payoffNote}` : `${unpaidLabel}(${r.payoff}/100)`
+      );
+    }
+    // 无缝循环的短片段:复看是白送的观看时长,小幅加分(归一化前生效才影响排序)
+    const score =
+      r.loop === true && clipDurationSec(c) <= LOOP_MAX_SEC
+        ? Math.min(100, (r.score || c.score) + LOOP_BOOST)
+        : r.score || c.score;
     return {
       ...c,
-      score: r.score || c.score,
-      recommended: r.keep,
+      score,
+      recommended: gate === "publish",
       reviewNote: r.note,
       // 质量门三档落进候选;drop 的理由必须让人看得见(UI 弃片折叠区展示)
-      gate: r.gate,
-      gateNotes: r.note ? [r.note] : undefined,
+      gate,
+      gateNotes: gateNotes.length > 0 ? gateNotes : undefined,
       scoreDims: r.dims,
       dimNotes: r.dimNotes,
       teaser: r.teaser || undefined,
+      payoff: r.payoff,
+      payoffNote: r.payoffNote,
+      loop: r.loop,
     };
   });
 }
@@ -712,7 +762,7 @@ export async function detectHighlights(
       parseReviews,
       signal
     );
-    return { candidates: finish(applyReviews(kept, reviews)), funnel };
+    return { candidates: finish(applyReviews(kept, reviews, promptLanguage(transcript))), funnel };
   } catch {
     return { candidates: finish(kept), funnel };
   }

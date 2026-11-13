@@ -130,7 +130,7 @@ function DetailTab({
       </div>
 
       {/* 钩子 + 理由 */}
-      {(c.hook || c.reason || c.teaser) && (
+      {(c.hook || c.reason || c.teaser || c.loop) && (
         <div className="flex flex-col gap-1.5">
           <SectionLabel>{t("fieldHook")}</SectionLabel>
           {c.hook && (
@@ -149,6 +149,12 @@ function DetailTab({
             <p className="text-[11px] leading-relaxed text-fg/60">
               <span className="mr-1.5 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-mut">{th("teaserLabel")}</span>
               {c.teaser}
+            </p>
+          )}
+          {/* 无缝循环:结尾顺回开头,复看是白送的观看时长 */}
+          {c.loop && (
+            <p className="text-[11px] leading-relaxed text-fg/60">
+              <span className="mr-1.5 rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-mut">{th("loopBadge")}</span>
             </p>
           )}
         </div>
@@ -180,7 +186,7 @@ function DetailTab({
         </div>
       )}
 
-      {/* 四维评审 */}
+      {/* 四维评审 + 兑现分(开头许诺在片内有没有落地) */}
       {c.scoreDims && (
         <div className="flex flex-col gap-1.5">
           <SectionLabel>{t("fieldDims")}</SectionLabel>
@@ -200,6 +206,15 @@ function DetailTab({
               <span className="w-5 shrink-0 text-right font-mono text-[10.5px] tabular-nums">{val}</span>
             </div>
           ))}
+          {c.payoff !== undefined && (
+            <div className="flex items-center gap-2" title={c.payoffNote || undefined}>
+              <span className="w-7 shrink-0 text-[10.5px] text-mut">{th("dimPayoff")}</span>
+              <span className="relative h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-line/70">
+                <span className="flame-gradient absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.min(100, Math.max(0, c.payoff))}%` }} />
+              </span>
+              <span className="w-5 shrink-0 text-right font-mono text-[10.5px] tabular-nums">{c.payoff}</span>
+            </div>
+          )}
         </div>
       )}
 

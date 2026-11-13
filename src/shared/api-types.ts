@@ -311,6 +311,21 @@ export interface HighlightCandidate {
   dimNotes?: { hook: string; flow: string; value: string; trend: string };
   /** Short suspense line (≤15 chars) usable as an on-video text hook. */
   teaser?: string;
+  /**
+   * Hook payoff (0-100, stage-2 reviewer): the first line promises something —
+   * curiosity, a claim, a question. Does the clip deliver it *inside* the clip?
+   * An unpaid hook is the most common reason a viewer swipes away, so a low
+   * score demotes the clip out of "publish" (the demote floor is PAYOFF_FLOOR).
+   */
+  payoff?: number;
+  /** One line: which line pays the hook off — or that nothing does. */
+  payoffNote?: string;
+  /**
+   * Loop-ability, short clips only (≤30s): does the last line lead straight
+   * back into the first, so the clip replays seamlessly? A clean loop is watch
+   * time the viewer gives you for free — the metric Shorts ranks on.
+   */
+  loop?: boolean;
   /** Stage-2 review verdict: false = the AI reviewer advises against publishing. */
   recommended: boolean;
   /** One-line reviewer note (why weak / why strong); may be empty. */

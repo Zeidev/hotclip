@@ -362,6 +362,8 @@ export const zh = {
     dimFlow: "结构",
     dimValue: "价值",
     dimTrend: "热点",
+    dimPayoff: "兑现",
+    loopBadge: "可无缝循环",
     teaserLabel: "悬念句",
     reviewOpen: "预览审阅",
     reviewOpenHint: "播放这条切片,拖时间轴手柄逐词微调切点",
