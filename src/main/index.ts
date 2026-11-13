@@ -175,13 +175,39 @@ async function serveMedia(request: Request): Promise<Response> {
   // controller.error(),响应体会"静默截断"——Chromium 侧就报 PIPELINE_ERROR_READ
   // (error.code=2)。自建 stream 显式传播错误,并在消费方取消时销毁文件句柄。
   const nodeStream = createReadStream(filePath, { start: range.start, end: range.end });
+  // [FIX] 背压。原实现只把 data 事件整个灌进队列,不看 desiredSize——磁盘读多快就往
+  // 队列里塞多快,而消费方(Chromium 的媒体缓冲)有自己够用就停的节奏。审阅台 +
+  // 源画面 + 竖屏裁切是同一文件的三路流,任一路都能把整个文件堆进内存,应用直接卡死
+  // 到只能强制关闭。队列满就 pause,消费方 pull 了再 resume。
+  let flowing = false;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      nodeStream.on("data", (chunk) => controller.enqueue(chunk as Uint8Array));
-      nodeStream.on("end", () => controller.close());
-      nodeStream.on("error", (err) => controller.error(err));
+      flowing = true;
+      nodeStream.on("data", (chunk) => {
+        if (!flowing) return;
+        controller.enqueue(chunk as Uint8Array);
+        if ((controller.desiredSize ?? 1) <= 0) {
+          flowing = false;
+          nodeStream.pause();
+        }
+      });
+      nodeStream.on("end", () => {
+        flowing = false;
+        controller.close();
+      });
+      nodeStream.on("error", (err) => {
+        flowing = false;
+        controller.error(err);
+      });
+    },
+    pull() {
+      if (!flowing) {
+        flowing = true;
+        nodeStream.resume();
+      }
     },
     cancel() {
+      flowing = false;
       nodeStream.destroy();
     },
   });
@@ -823,7 +849,7 @@ ipcMain.handle(
     let t = transcript as Transcript;
     const config = llm as LlmConfig;
     if (!t || !Array.isArray(t.segments)) throw new Error("detect-highlights requires a transcript");
-    if (!config?.baseUrl || !config?.model) throw new Error("请先在设置里配置 LLM(baseUrl/model)");
+    if (!config?.baseUrl || !config?.model) throw new Error("请先在设置里配置 LLM(baseUrl/model) / configure the LLM (Base URL + model) in Settings first");
     // 参考爆款画像(可选):用户显式给的输入,分析失败按无参考继续,
     // 但失败原因必须随结果带回给 UI——不静默丢
     let reference: ReferenceProfile | undefined;
@@ -1442,7 +1468,7 @@ ipcMain.handle("hotclip:watch-start", async (event, dir: unknown, llm: unknown, 
   if (typeof dir !== "string" || !dir.trim()) throw new Error("watch requires a directory");
   const selection = validateDetectionOptions(detection);
   const config = llm as LlmConfig;
-  if (!config?.baseUrl || !config?.model) throw new Error("请先在设置里配置 LLM(baseUrl/model)");
+  if (!config?.baseUrl || !config?.model) throw new Error("请先在设置里配置 LLM(baseUrl/model) / configure the LLM (Base URL + model) in Settings first");
   await webhookHandle?.close();
   webhookHandle = null;
   webhookInfo = null;
@@ -1504,11 +1530,11 @@ ipcMain.handle("hotclip:automation-tasks-clear", () => withAutomationTasks((task
 ipcMain.handle("hotclip:automation-task-retry", async (event, id: unknown, llm: unknown, outDir: unknown) => {
   if (typeof id !== "string") return false;
   const config = llm as LlmConfig;
-  if (!config?.baseUrl || !config?.model) throw new Error("请先在设置里配置 LLM(baseUrl/model)");
+  if (!config?.baseUrl || !config?.model) throw new Error("请先在设置里配置 LLM(baseUrl/model) / configure the LLM (Base URL + model) in Settings first");
   const task = (await readAutomationTasks()).find((item) => item.id === id);
   if (!task || ["queued", "running", "completed"].includes(task.status)) return false;
   const info = await stat(task.sourcePath).catch(() => null);
-  if (!info?.isFile()) throw new Error("源文件不存在或不可读");
+  if (!info?.isFile()) throw new Error("源文件不存在或不可读 / source file missing or unreadable");
   const seen = await loadWatchSeen();
   const emit = (e: Omit<WatchEvent, "at">): void => {
     if (!event.sender.isDestroyed()) event.sender.send("hotclip:watch-event", { ...e, at: Date.now() });
@@ -1523,16 +1549,16 @@ ipcMain.handle("hotclip:automation-task-retry", async (event, id: unknown, llm: 
 ipcMain.handle(
   "hotclip:webhook-start",
   async (event, dir: unknown, llm: unknown, outDir: unknown, port: unknown, token: unknown, detection: unknown) => {
-    if (typeof dir !== "string" || !dir.trim()) throw new Error("webhook 需要指定录播目录");
+    if (typeof dir !== "string" || !dir.trim()) throw new Error("webhook 需要指定录播目录 / webhook needs a recording directory");
     const selection = validateDetectionOptions(detection);
     const config = llm as LlmConfig;
-    if (!config?.baseUrl || !config?.model) throw new Error("请先在设置里配置 LLM(baseUrl/model)");
+    if (!config?.baseUrl || !config?.model) throw new Error("请先在设置里配置 LLM(baseUrl/model) / configure the LLM (Base URL + model) in Settings first");
     if (watchTimer) clearInterval(watchTimer);
     watchTimer = null;
     watchDirPath = null;
     const recDir = dir.trim();
     const s = await stat(recDir).catch(() => null);
-    if (!s?.isDirectory()) throw new Error(`录播目录不存在: ${recDir}`);
+    if (!s?.isDirectory()) throw new Error(`录播目录不存在 / recording directory not found: ${recDir}`);
     await webhookHandle?.close();
     webhookHandle = null;
 
@@ -1552,7 +1578,7 @@ ipcMain.handle(
         webhookChain = webhookChain.then(async () => {
           const st = await stat(e.path).catch(() => null);
           if (!st?.isFile()) {
-            emit({ type: "error", file: basename(e.path), path: e.path, message: "回调指向的文件不存在或不可读" });
+            emit({ type: "error", file: basename(e.path), path: e.path, message: "回调指向的文件不存在或不可读 / the file in the callback is missing or unreadable" });
             return;
           }
           const f: WatchedFile = { path: e.path, size: st.size, mtimeMs: st.mtimeMs };

@@ -38,6 +38,26 @@ export function detectLocale(): Locale {
   return sys.startsWith("zh") ? "zh" : "en";
 }
 
+/**
+ * Locale the UI persisted (the locale store writes this key). For non-React callers
+ * that must produce a human-readable string right now — auto-named schemes and brand
+ * presets are created in a store, and hardcoding Chinese there leaks zh into en/tr UI.
+ */
+export function storedLocale(): Locale {
+  try {
+    const saved = localStorage.getItem("hotclip-locale");
+    if (isLocale(saved)) return saved;
+  } catch {
+    /* no storage — fall through */
+  }
+  return "en";
+}
+
+/** translate() bound to the persisted locale, for non-React callers. */
+export function translateNow(namespace: string, key: string, params?: Record<string, string | number>): string {
+  return translate(storedLocale(), namespace, key, params);
+}
+
 /** Resolve namespace.key in the given locale; falls back to zh, then the key itself. */
 export function translate(
   locale: Locale,

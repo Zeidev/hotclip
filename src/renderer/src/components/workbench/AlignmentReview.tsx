@@ -34,7 +34,7 @@ export function AlignmentReview({ transcript, selectedIds, onAudition }: { trans
   return <div className="shrink-0 space-y-2 border-b border-line/60 px-3 py-2 text-xs">
     <div className="flex flex-wrap items-center gap-2">
       <label>{t("alignEngine")} <select aria-label={t("alignEngine")} value={engine} disabled={busy} onChange={(e) => setEngine(e.target.value as typeof engine)} className="rounded border border-line bg-panel-2 p-1.5">
-        <option value="paraformer">Paraformer · 中文 / English</option><option value="qwen3">Qwen3 · {t("localServiceName")}</option><option value="whisper-cpp">Whisper.cpp · {t("alignEngineWhisper")}</option>
+        <option value="paraformer">Paraformer · {t("alignParaformerLangs")}</option><option value="qwen3">Qwen3 · {t("localServiceName")}</option><option value="whisper-cpp">Whisper.cpp · {t("alignEngineWhisper")}</option>
       </select></label>
       <label>{t("alignLanguage")} <select aria-label={t("alignLanguage")} value={language} disabled={busy} onChange={(e) => setLanguage(e.target.value)} className="rounded border border-line bg-panel-2 p-1.5">
         <option value="auto">{t("alignLanguageAuto")}</option>

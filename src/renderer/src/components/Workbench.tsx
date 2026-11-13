@@ -185,6 +185,13 @@ export function Workbench({ onCloseProject }: { onCloseProject: () => void }): R
   const [defaultOutDir, setDefaultOutDir] = useState("");
   const [showTranscriptTimeline, setShowTranscriptTimeline] = useState(false);
   const [transportCommand, setTransportCommand] = useState<PreviewTransportCommand | null>(null);
+
+  // 审阅台自带一路 <video>,工作台这边还有两路(源画面 + 竖屏裁切)。同一大文件上
+  // 三路解码同时跑,加上审阅台的全屏 backdrop-blur,大文件会直接把界面拖到卡死。
+  // 打开审阅台前先把工作台这条停下。
+  useEffect(() => {
+    if (reviewId !== null) setTransportCommand({ id: Date.now(), action: "pause" });
+  }, [reviewId]);
   const currentSecRef = useRef(0);
   useEffect(() => {
     void getApi().defaultOutDir().then(setDefaultOutDir).catch(() => {});

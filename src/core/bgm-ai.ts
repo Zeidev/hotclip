@@ -56,8 +56,8 @@ export async function generateAiBgm(opts: {
   now?: () => number;
 }): Promise<string> {
   const mediaBase = atlasMediaBase(opts.baseUrl);
-  if (!mediaBase) throw new Error("AI BGM 需要 Atlas Cloud 端点(设置里把 AI 服务切到 Atlas 档)");
-  if (!opts.apiKey) throw new Error("AI BGM 需要 API Key");
+  if (!mediaBase) throw new Error("AI BGM 需要 Atlas Cloud 端点(设置里把 AI 服务切到 Atlas 档) / AI BGM needs the Atlas Cloud endpoint (switch the AI provider to Atlas in Settings)");
+  if (!opts.apiKey) throw new Error("AI BGM 需要 API Key / AI BGM needs an API key");
   const url = await generateMedia(
     "generateAudio",
     { model: BGM_MODEL, prompt: bgmPrompt(opts.genreId), is_instrumental: true, format: "mp3", sample_rate: 44100, bitrate: 256000 },

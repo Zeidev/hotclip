@@ -96,7 +96,7 @@ export async function transcribeCached(
   // replace it with ASR or run ASR glossary corrections over reviewed subtitles.
   if (subtitlePath !== undefined) return importSubtitleFile(videoPath, subtitlePath, signal);
   const s = await stat(videoPath).catch(() => null);
-  if (!s || !s.isFile()) throw new Error(`文件不存在或不可读: ${videoPath}`);
+  if (!s || !s.isFile()) throw new Error(`文件不存在或不可读 / file missing or unreadable: ${videoPath}`);
   const fileStat = { size: s.size, mtimeMs: s.mtimeMs };
   const applied = (t: Transcript): Transcript => applyGlossaryToTranscript(t, glossary ?? []).transcript;
   const engineId = asr.engineId ?? "sensevoice";
@@ -159,7 +159,7 @@ export async function detectForPipeline(
   cfg: Pick<AutoClipConfig, "modelsRoot" | "evidenceCacheDir" | "llm" | "maxClips" | "clipLength" | "genre" | "reference" | "reviewMemory" | "performanceMemory" | "signal">
 ): Promise<HighlightCandidate[]> {
   const selection = validateDetectionOptions(cfg);
-  if (transcript.segments.length === 0) throw new Error("转写结果为空(可能是无人声素材)");
+  if (transcript.segments.length === 0) throw new Error("转写结果为空(可能是无人声素材) / empty transcript (the source may have no speech)");
   const media = await probeMedia(videoPath).catch(() => null);
   const analysis: AnalysisVideoOptions = media?.hasVideo
     ? { videoStreamIndex: media.videoStreamIndex, color: planColorRender(media) }

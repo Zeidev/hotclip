@@ -494,7 +494,7 @@ function AiSection(): React.JSX.Element {
                   active ? "border-ember/60 bg-ember/10 text-fg" : "border-line text-mut hover:border-mut"
                 }`}
               >
-                {preset.label}
+                {preset.labelKey ? t(preset.labelKey) : preset.label}
                 <div className="mt-0.5 truncate text-[10.5px] font-normal text-mut">{preset.baseUrl.replace(/^https?:\/\//, "")}</div>
               </button>
             );

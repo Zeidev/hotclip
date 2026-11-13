@@ -180,7 +180,7 @@ export async function importPerformanceFile(
         ? ((parsed as { data?: unknown; items?: unknown; videos?: unknown }).data ??
           (parsed as { items?: unknown }).items ?? (parsed as { videos?: unknown }).videos)
         : null;
-    if (!Array.isArray(value)) throw new Error("JSON 需要是数组,或包含 data/items/videos 数组");
+    if (!Array.isArray(value)) throw new Error("JSON 需要是数组,或包含 data/items/videos 数组 / JSON must be an array, or contain a data/items/videos array");
     rows = value as Row[];
   }
   const defaultPlatform = basename(inputPath, ext).split(/[-_.]/)[0] || "unknown";

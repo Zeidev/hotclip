@@ -4,6 +4,7 @@
  */
 import { create } from "zustand";
 import type { BrandStyle } from "../../../shared/api-types";
+import { translateNow } from "../i18n/messages";
 
 const STORAGE_KEY = "hotclip-brand";
 
@@ -80,7 +81,8 @@ export const useBrandStore = create<BrandState>((set, get) => ({
     let { presets, activeId } = get();
     // "默认"是只读锚点:一改就分叉出"我的样式",默认永远可回退
     if (activeId === "default") {
-      const fork: BrandPreset = { id: newId(), name: "我的样式", style: {} };
+      // 分叉名按当前界面语言取(store 里写死中文会在英文界面上漏出来)
+      const fork: BrandPreset = { id: newId(), name: translateNow("brand", "forkPresetName"), style: {} };
       presets = [...presets, fork];
       activeId = fork.id;
     }
@@ -98,7 +100,7 @@ export const useBrandStore = create<BrandState>((set, get) => ({
     set(s);
   },
   addPreset: (name) => {
-    const preset: BrandPreset = { id: newId(), name: name.trim() || "新预设", style: {} };
+    const preset: BrandPreset = { id: newId(), name: name.trim() || translateNow("brand", "newPresetName"), style: {} };
     const s = { presets: [...get().presets, preset], activeId: preset.id };
     persist(s);
     set(s);

@@ -11,7 +11,7 @@ import { useT } from "../../i18n/store";
 
 export interface PreviewTransportCommand {
   id: number;
-  action: "toggle" | "back5" | "forward5" | "audition";
+  action: "toggle" | "back5" | "forward5" | "audition" | "pause";
   startSec?: number;
   endSec?: number;
 }
@@ -71,11 +71,19 @@ export function PreviewPane({
     v.currentTime = seekSec;
   }, [seekSec]);
 
-  // 竖屏裁切卡与主画面粗同步:漂移超过 0.3s 才校,别抖
-  const syncCrop = (): void => {
+  // 竖屏裁切卡与主画面粗同步:漂移超过 0.3s 才校,别抖。
+  // [FIX] 再加 250ms 下限:timeupdate 密集时不必每次都去校裁切画面,每校一次
+  // 都是一次解码跳转,白白占一份 CPU。play/pause 这类要立刻对齐的走 force。
+  const lastSyncRef = useRef(0);
+  const syncCrop = (force = false): void => {
     const m = mainRef.current;
     const c = cropRef.current;
     if (!m || !c) return;
+    const nowMs = performance.now();
+    if (!force) {
+      if (nowMs - lastSyncRef.current < 250) return;
+      lastSyncRef.current = nowMs;
+    }
     if (Math.abs(c.currentTime - m.currentTime) > 0.3) c.currentTime = m.currentTime;
     if (m.paused !== c.paused) {
       if (m.paused) c.pause();
@@ -106,6 +114,12 @@ export function PreviewPane({
       else video.pause();
       return;
     }
+    // 审阅台要独占解码资源:停住这一路(含竖屏裁切),别再跟着跑
+    if (transportCommand.action === "pause") {
+      video.pause();
+      syncCrop(true);
+      return;
+    }
     const delta = transportCommand.action === "back5" ? -5 : 5;
     video.currentTime = Math.max(0, Math.min(durationSec, video.currentTime + delta));
   }, [durationSec, transportCommand]);
@@ -125,11 +139,11 @@ export function PreviewPane({
               onClick={togglePlay}
               onPlay={() => {
                 setPlaying(true);
-                syncCrop();
+                syncCrop(true);
               }}
               onPause={() => {
                 setPlaying(false);
-                syncCrop();
+                syncCrop(true);
               }}
               onTimeUpdate={(e) => {
                 const sec = (e.target as HTMLVideoElement).currentTime;

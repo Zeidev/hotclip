@@ -7,7 +7,7 @@ import { useT } from "../../i18n/store";
 import { getApi, isElectron } from "../../api/provider";
 import { useSession } from "../../stores/session-store";
 import { useRenderPrefs } from "../../stores/render-prefs-store";
-import { useSchemes, BUILTIN_SCHEMES, matchesScheme } from "../../stores/scheme-store";
+import { useSchemes, BUILTIN_SCHEMES, matchesScheme, schemeLabel } from "../../stores/scheme-store";
 import { useBrandStore, activeBrandStyle } from "../../stores/brand-store";
 import { transformScore } from "../../../../shared/transform-score";
 import { clipDurationSec } from "../../../../shared/pieces";
@@ -79,7 +79,7 @@ export function ExportBar({
           {!active && <option value="__custom">{t("schemeCustom")}</option>}
           {schemes.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.name}
+              {schemeLabel(s, t)}
             </option>
           ))}
         </select>

@@ -7,6 +7,7 @@
  * 路径类偏好(outDir/bgmPath 跟素材与机器走,不该被方案覆盖)。
  */
 import { create } from "zustand";
+import { translateNow } from "../i18n/messages";
 import { RENDER_PREF_DEFAULTS, type RenderPrefs } from "./render-prefs-store";
 
 const STORAGE_KEY = "hotclip-schemes";
@@ -28,9 +29,19 @@ export type SchemeSnapshot = Pick<RenderPrefs, (typeof SCHEME_KEYS)[number]>;
 export interface Scheme {
   id: string;
   name: string;
+  /**
+   * 内置方案的 i18n key(workbench 命名空间)。带 key 就不看 name——
+   * 名字硬编码在 store 里,英文界面会直接漏出中文。
+   */
+  nameKey?: string;
   /** 内置方案不可删除/覆盖。 */
   builtin?: boolean;
   prefs: SchemeSnapshot;
+}
+
+/** 方案显示名:内置走 i18n,用户自存的用存下来的名字。 */
+export function schemeLabel(scheme: Scheme, t: (key: string) => string): string {
+  return scheme.nameKey ? t(scheme.nameKey) : scheme.name;
 }
 
 function snap(overrides: Partial<SchemeSnapshot> = {}): SchemeSnapshot {
@@ -39,12 +50,13 @@ function snap(overrides: Partial<SchemeSnapshot> = {}): SchemeSnapshot {
   return { ...(out as SchemeSnapshot), ...overrides };
 }
 
-/** 内置三档:出厂默认 / 带货矩阵全开 / 只要最快出素材。 */
+/** 内置三档:出厂默认 / 带货矩阵全开 / 只要最快出素材。名字由 nameKey 渲染。 */
 export const BUILTIN_SCHEMES: Scheme[] = [
-  { id: "default", name: "默认出片", builtin: true, prefs: snap() },
+  { id: "default", name: "默认出片", nameKey: "schemeDefault", builtin: true, prefs: snap() },
   {
     id: "selling",
     name: "带货全家桶",
+    nameKey: "schemeSelling",
     builtin: true,
     prefs: snap({
       publishCopy: true,
@@ -61,6 +73,7 @@ export const BUILTIN_SCHEMES: Scheme[] = [
   {
     id: "minimal",
     name: "极简省时",
+    nameKey: "schemeMinimal",
     builtin: true,
     prefs: snap({
       titleCard: false,
@@ -107,7 +120,12 @@ interface SchemeState {
 export const useSchemes = create<SchemeState>((set, get) => ({
   userSchemes: loadUserSchemes(),
   saveCurrent: (name, prefs) => {
-    const scheme: Scheme = { id: `user-${Date.now()}`, name: name.slice(0, 20) || "我的方案", prefs: snapshotOf(prefs) };
+    const scheme: Scheme = {
+      id: `user-${Date.now()}`,
+      // 兜底名按当前界面语言取,别把中文写死在英文界面上
+      name: name.slice(0, 20) || translateNow("workbench", "schemeFallbackName"),
+      prefs: snapshotOf(prefs),
+    };
     const userSchemes = [...get().userSchemes, scheme].slice(-8); // 上限 8 个,先进先出
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(userSchemes));

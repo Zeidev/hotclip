@@ -96,7 +96,6 @@ export function ClipReviewModal({
   // 画面速览:3×3 接触表(打开时按 AI 原始切点取一次;空串 = 不支持/失败,不展示)
   const [sheet, setSheet] = useState("");
   const [playing, setPlaying] = useState(false);
-  const [playheadSec, setPlayheadSec] = useState(clip.startSec);
   const [videoFailed, setVideoFailed] = useState(false);
   // [FIX] 记下 MediaError.code,占位文案里如实报出来。
   // 2 = MEDIA_ERR_NETWORK(流读取中断,协议层问题),4 = MEDIA_ERR_SRC_NOT_SUPPORTED。
@@ -155,12 +154,34 @@ export function ClipReviewModal({
   const videoRef = useRef<HTMLVideoElement>(null);
   const laneRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const playheadRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef(0);
+  // 拖动手柄时排队的 seek(见 seekTo)
+  const pendingSeekRef = useRef<number | null>(null);
+  const seekRafRef = useRef(0);
   // 播放循环里读最新切点,避免闭包吃到旧值
   const boundsRef = useRef({ startSec, endSec });
   boundsRef.current = { startSec, endSec };
   const piecesRef = useRef(pieces);
   piecesRef.current = pieces;
+  const winRef = useRef(win);
+  winRef.current = win;
+
+  // [FIX] 播放头走 DOM,不走 state。原实现每帧 setPlayheadSec,整个审阅台
+  // (帧列表、整段文字、安全区遮罩)每秒重渲 60 次,播放时明显掉帧、拖动手柄
+  // 时更卡。播放头是这里唯一需要每帧动的东西,用 ref 直接写位置。
+  const paintPlayhead = useCallback((at: number): void => {
+    const el = playheadRef.current;
+    if (!el) return;
+    const w = winRef.current;
+    const span = w.winEndSec - w.winStartSec;
+    const frac = span > 0 ? Math.max(0, Math.min(1, (at - w.winStartSec) / span)) : 0;
+    el.style.left = `${frac * 100}%`;
+  }, []);
+
+  useEffect(() => {
+    paintPlayhead(clip.startSec);
+  }, [paintPlayhead, clip.startSec, win]);
 
   // ---- 波形 ----
   // 拼接片跳过:跨度可能有几十分钟,画出来的波形绝大部分是根本不会进成片的
@@ -253,7 +274,7 @@ export function ClipReviewModal({
   const tick = useCallback((): void => {
     const v = videoRef.current;
     if (!v) return;
-    setPlayheadSec(v.currentTime);
+    paintPlayhead(v.currentTime);
     const ps = piecesRef.current;
     if (ps.length > 1) {
       // 拼接预览:播到本段末尾就跳到下一段开头,最后一段放完即停——
@@ -270,7 +291,7 @@ export function ClipReviewModal({
       return;
     }
     rafRef.current = requestAnimationFrame(tick);
-  }, []);
+  }, [paintPlayhead]);
 
   const playFrom = useCallback(
     (at: number): void => {
@@ -282,8 +303,14 @@ export function ClipReviewModal({
         setVideoFailed(false);
         v.load();
       }
+      // 直接开播会覆盖拖拽中排队的 seek,先把待办丢掉,免得 16ms 后再被拉回去
+      if (seekRafRef.current) {
+        cancelAnimationFrame(seekRafRef.current);
+        seekRafRef.current = 0;
+      }
+      pendingSeekRef.current = null;
       v.currentTime = at;
-      setPlayheadSec(at);
+      paintPlayhead(at);
       void v
         .play()
         .then(() => {
@@ -294,16 +321,36 @@ export function ClipReviewModal({
           /* 播放被浏览器拒绝(极少)——按钮再点一次即可 */
         });
     },
-    [stopLoop, tick, videoFailed]
+    [stopLoop, tick, videoFailed, paintPlayhead]
   );
 
-  const seekTo = useCallback((at: number): void => {
-    const v = videoRef.current;
-    if (v) v.currentTime = at;
-    setPlayheadSec(at);
-  }, []);
+  // [FIX] 拖动手柄时 pointermove 一帧可能来好几次,逐次写 currentTime 会把解码器
+  // 反复打断——画面看着就是"卡住不动"。合并成一帧最多一次 seek。
+  const seekTo = useCallback(
+    (at: number): void => {
+      paintPlayhead(at);
+      pendingSeekRef.current = at;
+      if (seekRafRef.current) return;
+      seekRafRef.current = requestAnimationFrame(() => {
+        seekRafRef.current = 0;
+        const next = pendingSeekRef.current;
+        pendingSeekRef.current = null;
+        const v = videoRef.current;
+        if (next === null || !v) return;
+        if (Math.abs(v.currentTime - next) > 0.01) v.currentTime = next;
+      });
+    },
+    [paintPlayhead]
+  );
 
-  useEffect(() => stopLoop, [stopLoop]); // 卸载时停掉播放循环
+  // 卸载时停掉播放循环与排队的 seek
+  useEffect(
+    () => () => {
+      stopLoop();
+      if (seekRafRef.current) cancelAnimationFrame(seekRafRef.current);
+    },
+    [stopLoop]
+  );
 
   // Esc 关闭(不保存)
   useEffect(() => {
@@ -571,11 +618,9 @@ export function ClipReviewModal({
             className="pointer-events-none absolute inset-y-0 border-x-2 border-ember/80 bg-ember/10"
             style={{ left: `${secToFrac(startSec) * 100}%`, width: `${(secToFrac(endSec) - secToFrac(startSec)) * 100}%` }}
           />
-          {/* 播放头 */}
-          <div
-            className="pointer-events-none absolute inset-y-0 w-px bg-fg/90"
-            style={{ left: `${secToFrac(playheadSec) * 100}%` }}
-          />
+          {/* 播放头:位置由 paintPlayhead 直接写 DOM,不能挂 style prop——
+              React 每次重渲都会把它拽回旧值 */}
+          <div ref={playheadRef} className="pointer-events-none absolute inset-y-0 w-px bg-fg/90" />
           {/* 起止手柄 */}
           {(["start", "end"] as const).map((edge) => (
             <div

@@ -8,7 +8,7 @@ import { useT, useLocaleStore } from "../../i18n/store";
 import { getApi } from "../../api/provider";
 import { useRenderPrefs } from "../../stores/render-prefs-store";
 import { useLlmStore } from "../../stores/llm-store";
-import { useSchemes, BUILTIN_SCHEMES, matchesScheme } from "../../stores/scheme-store";
+import { useSchemes, BUILTIN_SCHEMES, matchesScheme, schemeLabel } from "../../stores/scheme-store";
 import { PLATFORM_SPECS } from "../../../../shared/platform-specs";
 import { ModalShell, SectionLabel, Segmented, SwitchRow } from "../ui";
 import type { CaptionStyleChoice } from "../../../../shared/api-types";
@@ -90,7 +90,7 @@ export function ExportPanel({
                   activeScheme?.id === s.id ? "border-ember/70 bg-ember/12 text-ember" : "border-line text-mut hover:border-mut hover:text-fg"
                 }`}
               >
-                {s.name}
+                {schemeLabel(s, t)}
               </button>
               {!s.builtin && (
                 <button

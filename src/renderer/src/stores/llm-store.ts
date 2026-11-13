@@ -52,7 +52,10 @@ function loadLocalEndpoint(key: string, defaults: PrefilterSettings): PrefilterS
 
 export interface LlmPreset {
   id: string;
+  /** 兜底显示名(中文)。有 labelKey 时界面用 labelKey 走 i18n。 */
   label: string;
+  /** i18n key(highlights 命名空间)。家喻户晓的英文品牌名不必挂。 */
+  labelKey?: string;
   baseUrl: string;
   /** 出厂建议模型。模型 id 会随厂商换代失效——UI 上的「拉取模型」才是准的。 */
   model: string;
@@ -76,6 +79,7 @@ export const LLM_PRESET_LIST: LlmPreset[] = [
   {
     id: "deepseek",
     label: "DeepSeek 官方",
+    labelKey: "llmPresetDeepseek",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-v4-flash",
     keyUrl: "https://platform.deepseek.com/api_keys",
@@ -83,6 +87,7 @@ export const LLM_PRESET_LIST: LlmPreset[] = [
   {
     id: "dashscope",
     label: "阿里云百炼(通义千问)",
+    labelKey: "llmPresetDashscope",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model: "qwen-plus",
     keyUrl: "https://bailian.console.aliyun.com/",
@@ -90,6 +95,7 @@ export const LLM_PRESET_LIST: LlmPreset[] = [
   {
     id: "zhipu",
     label: "智谱 GLM",
+    labelKey: "llmPresetZhipu",
     // 智谱的兼容路径就到 v4 为止,后面直接接 /chat/completions(不带 /v1)
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     model: "glm-4.7",
@@ -98,6 +104,7 @@ export const LLM_PRESET_LIST: LlmPreset[] = [
   {
     id: "moonshot",
     label: "月之暗面 Kimi",
+    labelKey: "llmPresetMoonshot",
     baseUrl: "https://api.moonshot.cn/v1",
     model: "kimi-k2.5",
     keyUrl: "https://platform.moonshot.cn/console/api-keys",
@@ -105,6 +112,7 @@ export const LLM_PRESET_LIST: LlmPreset[] = [
   {
     id: "siliconflow",
     label: "硅基流动",
+    labelKey: "llmPresetSiliconflow",
     baseUrl: "https://api.siliconflow.cn/v1",
     model: "deepseek-ai/DeepSeek-V3",
     keyUrl: "https://cloud.siliconflow.cn/account/ak",
@@ -126,6 +134,7 @@ export const LLM_PRESET_LIST: LlmPreset[] = [
   {
     id: "ollama",
     label: "Ollama(本地)",
+    labelKey: "llmPresetOllama",
     baseUrl: "http://localhost:11434/v1",
     model: "qwen3:8b",
     keyUrl: "",
