@@ -46,17 +46,39 @@ export const HORIZONTAL_LAYOUT: AssLayout = {
 };
 
 /**
- * The bundled caption font (resources/fonts/SourceHanSansSC-Bold.otf, OFL).
- * Shipping our own font + passing fontsdir to the subtitles filter is the only
- * way to get identical CJK rendering on every machine — fontconfig fallback is
- * a lottery (missing zh fonts render as tofu boxes on bare Windows installs).
+ * The bundled caption fonts (resources/fonts, both OFL).
+ * Shipping our own fonts + passing fontsdir to the subtitles filter is the only
+ * way to get identical rendering on every machine — fontconfig fallback is a
+ * lottery (missing fonts render as tofu boxes on bare Windows installs).
+ *
+ * Two faces, because one cannot cover both scripts:
+ *  - SourceHanSansSC-Bold.otf — CJK, but Latin-1 only. It carries no Latin
+ *    Extended-A glyphs, so Turkish (ı İ ğ Ğ ş Ş), Czech and Polish captions
+ *    rendered as tofu.
+ *  - NotoSans-Bold.ttf — the full Latin block set, used for non-CJK captions.
  */
 export const BUNDLED_FONT_FAMILY = "Source Han Sans SC";
+export const LATIN_FONT_FAMILY = "Noto Sans";
 
-/** Bundled font first; per-platform system font as a fontconfig fallback. */
-export function defaultFontName(platform: NodeJS.Platform = process.platform): string {
-  void platform;
-  return BUNDLED_FONT_FAMILY;
+/** CJK ratio at which the CJK face is the right choice (the ASR segment joiner uses the same bar). */
+const CJK_FONT_MIN_RATIO = 0.5;
+
+/**
+ * Pick the bundled face that actually has the glyphs this text needs. Decided
+ * from the clip's own words, so a Turkish clip keeps Latin glyphs even when the
+ * project or the UI around it is Chinese.
+ */
+export function fontNameForWords(words: readonly TranscriptWord[]): string {
+  let cjk = 0;
+  let total = 0;
+  for (const word of words) {
+    for (const ch of word.text) {
+      total++;
+      if (CJK_RE.test(ch)) cjk++;
+    }
+  }
+  if (total === 0) return BUNDLED_FONT_FAMILY;
+  return cjk / total > CJK_FONT_MIN_RATIO ? BUNDLED_FONT_FAMILY : LATIN_FONT_FAMILY;
 }
 
 const CJK_RE = /[぀-ヿ㐀-鿿豈-﫿가-힯]/;
@@ -670,7 +692,7 @@ export function buildCaptionAss(
   style: CaptionStyle = "karaoke",
   options: CaptionOptions = {}
 ): string {
-  const fontName = options.fontName ?? defaultFontName();
+  const fontName = options.fontName ?? fontNameForWords(words);
   const highlightHex = isValidHex(options.highlightHex) ? options.highlightHex : undefined;
   const events: string[] = [];
 
@@ -759,12 +781,12 @@ export function buildCaptionAss(
   return [...assHeader(style, layout, fontName, highlightHex), ...events, ""].join("\n");
 }
 
-/** Back-compat wrapper (karaoke style). */
+/** Back-compat wrapper (karaoke style). Omitted fontName means the script-appropriate bundled face. */
 export function buildKaraokeAss(
   words: TranscriptWord[],
   clipStartSec: number,
   layout: AssLayout,
-  fontName: string = defaultFontName()
+  fontName?: string
 ): string {
-  return buildCaptionAss(words, clipStartSec, layout, "karaoke", { fontName });
+  return buildCaptionAss(words, clipStartSec, layout, "karaoke", fontName ? { fontName } : {});
 }

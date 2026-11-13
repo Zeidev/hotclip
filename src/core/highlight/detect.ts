@@ -16,8 +16,8 @@ import {
   extractJson,
   CLIP_LENGTH_RANGES,
   isChineseTranscript,
-  MOMENT_SYSTEM_PROMPT_ZH,
-  MOMENT_SYSTEM_PROMPT_EN,
+  promptLanguage,
+  momentSystemPrompt,
   buildMomentPrompt,
 } from "./prompt";
 import { resolveSelection, type RawSelection, type RawPart } from "./match";
@@ -768,10 +768,10 @@ export async function detectMoments(
   );
   if (moments.length === 0) return [];
 
-  const zh = isChineseTranscript(transcript);
+  const lang = promptLanguage(transcript);
   const picks = await chatCompleteJson(
     llm,
-    zh ? MOMENT_SYSTEM_PROMPT_ZH : MOMENT_SYSTEM_PROMPT_EN,
+    momentSystemPrompt(lang),
     buildMomentPrompt(
       moments.map((m) => ({
         id: m.id,
@@ -781,7 +781,7 @@ export async function detectMoments(
         text: textInRange(transcript, m.startSec, m.endSec),
       })),
       maxClips === undefined ? 4 : normalizeMaxClips(maxClips),
-      zh
+      lang
     ),
     parseMomentPicks,
     signal

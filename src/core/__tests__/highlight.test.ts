@@ -3,12 +3,17 @@ import { normalizeText, buildTokenIndex, matchQuote, resolveSelection } from "..
 import { parseSelections, dropOverlaps, parseReviews, applyReviews, normalizeScores, clipLengthBounds, mergeProductKeywords } from "../highlight/detect";
 import {
   buildHighlightPrompt,
+  buildMomentPrompt,
+  buildReviewPrompt,
   renderTranscriptLines,
   extractJson,
   isChineseTranscript,
   isMultiSpeaker,
   highlightSystemPrompt,
+  momentSystemPrompt,
+  promptLanguage,
   renderSignals,
+  reviewSystemPrompt,
 } from "../highlight/prompt";
 import type { Transcript, TranscriptWord } from "../transcribe/types";
 import type { HighlightCandidate } from "../../shared/api-types";
@@ -307,6 +312,71 @@ describe("prompt language routing（中英分流）", () => {
     expect(isChineseTranscript(autoTx)).toBe(true);
     const autoEn: Transcript = { ...enTx, language: "auto" };
     expect(isChineseTranscript(autoEn)).toBe(false);
+  });
+});
+
+describe("Türkçe prompt yolu", () => {
+  const trTx: Transcript = {
+    engine: "test",
+    language: "tr",
+    durationSec: 12,
+    segments: [
+      { id: 1, startSec: 0, endSec: 4, text: "Bunu kimse söylemiyor ama indirim asla gelmiyor.", words: [] },
+      { id: 2, startSec: 4, endSec: 8, text: "Şimdi her şeye yüzde elli indirim yapıyoruz.", words: [] },
+      { id: 3, startSec: 8, endSec: 12, text: "Iğdır'dan gelen siparişler de dahil.", words: [] },
+    ],
+  };
+
+  it("promptLanguage: tr / zh / en ayrımı", () => {
+    expect(promptLanguage(trTx)).toBe("tr");
+    expect(promptLanguage({ ...trTx, language: "en" })).toBe("en");
+    expect(promptLanguage({ ...makeTranscript(["这是一句中文。"]), language: "auto" })).toBe("zh");
+  });
+
+  it("auto dilde Türkçe harflerden tanınır", () => {
+    expect(promptLanguage({ ...trTx, language: "auto" })).toBe("tr");
+    expect(promptLanguage({ ...trTx, language: "auto", segments: [{ id: 1, startSec: 0, endSec: 4, text: "The discount never comes, honestly.", words: [] }] })).toBe("en");
+  });
+
+  it("Türkçe hook formülleri İngilizce metinle karışmaz", () => {
+    const sys = highlightSystemPrompt(trTx);
+    expect(sys).toContain("kurgu stratejistsin");
+    expect(sys).toContain("yapmayı bırak"); // TR hook formula, not a translation
+    expect(sys).toContain("parts");
+    expect(sys).not.toContain("clipping strategist");
+    expect(/[一-鿿]/.test(sys)).toBe(false);
+  });
+
+  it("kullanıcı promptu Türkçe alan adlarını taşır", () => {
+    const user = buildHighlightPrompt(trTx, 6);
+    expect(user).toContain("【Döküm】");
+    expect(user).toContain("Alanlar: title");
+    expect(/[一-鿿]/.test(user)).toBe(false);
+  });
+
+  it("süre kademesi Türkçe satırı da yeniden yazar", () => {
+    expect(highlightSystemPrompt(trTx)).toContain("Süre 8–40 saniye");
+    expect(highlightSystemPrompt(trTx, "short")).toContain("Süre 10–30 saniye");
+    expect(highlightSystemPrompt(trTx, "extended")).toContain("Süre 60–120 saniye");
+  });
+
+  it("değerlendirme ve moment kanalı da Türkçe", () => {
+    expect(reviewSystemPrompt(trTx)).toContain("denetçisisin");
+    expect(momentSystemPrompt("tr")).toContain("yüksek enerjili");
+    const mp = buildMomentPrompt(
+      [{ id: 7, startSec: 10, endSec: 14, evidence: ["loud", "danmaku"], text: "of yok artık" }],
+      3,
+      "tr"
+    );
+    expect(mp).toContain("Kanıt: ses yüksekliği zirvesi, canlı sohbet patlaması");
+    expect(mp).toContain("momentId = yukarıdaki listedeki gerçek numara");
+    expect(/[一-鿿]/.test(mp)).toBe(false);
+  });
+
+  it("Türkçe dökümde aday blokları Türkçe etiketlenir", () => {
+    const p = buildReviewPrompt(trTx, [{ id: 1, title: "İndirim çelişkisi", startSec: 0, endSec: 12, text: trTx.segments.map((s) => s.text).join(" ") }]);
+    expect(p).toContain("【Aday 1】");
+    expect(p).toContain("Öncesi:");
   });
 });
 

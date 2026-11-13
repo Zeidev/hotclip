@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
   sliceWords,
   groupWordsIntoLines,
@@ -9,6 +11,9 @@ import {
   popText,
   mergeKeywordWords,
   wrapTitle,
+  fontNameForWords,
+  BUNDLED_FONT_FAMILY,
+  LATIN_FONT_FAMILY,
   VERTICAL_LAYOUT,
   HORIZONTAL_LAYOUT,
 } from "../subtitle";
@@ -384,5 +389,73 @@ describe("AIGC 显式标识 (Aigc badge)", () => {
   it("未开启/零时长不产生事件", () => {
     expect(buildCaptionAss([], 0, VERTICAL_LAYOUT, "karaoke", {})).not.toContain(",Aigc,");
     expect(buildCaptionAss([], 0, VERTICAL_LAYOUT, "karaoke", { aigcBadge: { durationSec: 0 } })).not.toContain("Dialogue: 3");
+  });
+});
+
+describe("caption font follows the script", () => {
+  it("picks the Latin face for Turkish words (the CJK face has no ı İ ğ ş)", () => {
+    const words = [w("Değil", 0, 1), w("ışık", 1, 2), w("şimdi", 2, 3)];
+    expect(fontNameForWords(words)).toBe(LATIN_FONT_FAMILY);
+    expect(buildCaptionAss(words, 0, VERTICAL_LAYOUT)).toContain(`Style: Caption,${LATIN_FONT_FAMILY},`);
+  });
+
+  it("keeps the CJK face for CJK-dominant captions", () => {
+    const words = [w("你好", 0, 1), w("世界", 1, 2), w("hi", 2, 3)];
+    expect(fontNameForWords(words)).toBe(BUNDLED_FONT_FAMILY);
+    expect(buildCaptionAss(words, 0, VERTICAL_LAYOUT)).toContain(`Style: Caption,${BUNDLED_FONT_FAMILY},`);
+  });
+
+  it("falls back to the CJK face when there is nothing to sample", () => {
+    expect(fontNameForWords([])).toBe(BUNDLED_FONT_FAMILY);
+  });
+
+  it("lets an explicit fontName win over the automatic pick", () => {
+    const words = [w("Değil", 0, 1)];
+    expect(buildCaptionAss(words, 0, VERTICAL_LAYOUT, "karaoke", { fontName: "Custom Face" }))
+      .toContain("Style: Caption,Custom Face,");
+    expect(buildKaraokeAss(words, 0, VERTICAL_LAYOUT, "Custom Face")).toContain("Style: Caption,Custom Face,");
+  });
+});
+
+/** Minimal OpenType cmap reader — enough to prove a bundled font carries a glyph. */
+function fontHasGlyph(file: string, codePoint: number): boolean {
+  const buf = readFileSync(file);
+  const tableCount = buf.readUInt16BE(4);
+  let cmap = -1;
+  for (let i = 0; i < tableCount; i++) {
+    const rec = 12 + i * 16;
+    if (buf.toString("ascii", rec, rec + 4) === "cmap") cmap = buf.readUInt32BE(rec + 8);
+  }
+  expect(cmap).toBeGreaterThan(-1);
+  const subCount = buf.readUInt16BE(cmap + 2);
+  for (let i = 0; i < subCount; i++) {
+    const rec = cmap + 4 + i * 8;
+    if (buf.readUInt16BE(rec) !== 3) continue; // Windows Unicode subtables only
+    const offset = cmap + buf.readUInt32BE(rec + 4);
+    const format = buf.readUInt16BE(offset);
+    if (format === 4) {
+      const segX2 = buf.readUInt16BE(offset + 6);
+      for (let s = 0; s < segX2 / 2; s++) {
+        const end = buf.readUInt16BE(offset + 14 + s * 2);
+        const start = buf.readUInt16BE(offset + 16 + segX2 + s * 2);
+        if (codePoint >= start && codePoint <= end) return true;
+      }
+    } else if (format === 12) {
+      const groups = buf.readUInt32BE(offset + 12);
+      for (let g = 0; g < groups; g++) {
+        const group = offset + 16 + g * 12;
+        if (codePoint >= buf.readUInt32BE(group) && codePoint <= buf.readUInt32BE(group + 4)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+describe("bundled Latin font covers Turkish", () => {
+  const latin = join(__dirname, "..", "..", "..", "resources", "fonts", "NotoSans-Bold.ttf");
+  it("has every Turkish-only letter burned captions need", () => {
+    for (const ch of "ıİğĞşŞ") {
+      expect(fontHasGlyph(latin, ch.codePointAt(0)!)).toBe(true);
+    }
   });
 });

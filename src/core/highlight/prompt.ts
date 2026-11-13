@@ -3,9 +3,10 @@
  * nominates clip-worthy selections BY QUOTING TEXT — it never invents
  * timestamps (they are reverse-matched later).
  *
- * Bilingual by design: Chinese transcripts get the zh prompt, everything else
- * gets the en prompt, and titles/hooks/reasons always follow the transcript's
- * own language. Pure builders, testable.
+ * Multilingual by design: Chinese transcripts get the zh prompt, Turkish gets
+ * a native tr prompt (Turkish hook formulas are not translations of the
+ * English ones), everything else gets en — and titles/hooks/reasons always
+ * follow the transcript's own language. Pure builders, testable.
  */
 import type { Transcript } from "../transcribe/types";
 import type { ClipLength } from "../../shared/api-types";
@@ -120,6 +121,57 @@ How to write parts:
 6. Never quote-mine: the clipped meaning must match what was actually said. A "hook" manufactured by cutting a sentence in half will backfire on the account
 7. Write title/hook/reason in the SAME language as the transcript`;
 
+export const HIGHLIGHT_SYSTEM_PROMPT_TR = `Sen kısa video alanında çalışan bir kurgu stratejistsin. Sana uzun bir videonun cümle cümle dökümü veriliyor; içinden TikTok / Reels / Shorts'ta en çok izlenecek kesitleri seçeceksin.
+
+【Önce şunu kabul et: patlayan içerik nadirdir】
+İki saatlik bir yayında kurguya değer kısım genelde beş dakikanın altındadır, gerisi dolgudur. İki üç gerçek vuruş döndürmek, listeyi doldurmaktan iyidir — vasat klipler yayınlandığında bütün hesabı aşağı çeker.
+
+【Önce ne izlediğini anla, sonra hangi kanıta güveneceğine karar ver】
+Materyal canlı satış, oyun yayını, dans/müzik performansı, sohbet yayını, ders, sokak/saha videosu, podcast röportajı, spor anlatımı ya da kutu açılışı olabilir... her birinde vuruşun yeri tamamen farklıdır. Önce türü kendin belirle, sonra ağırlığı ona göre ver:
+- **Sözü içerik olanlar** (satış / ders / röportaj / anlatım / inceleme): vuruş söylenendedir, dökümden karar ver
+- **Tepki odaklı olanlar** (oyun / sohbet / saha / spor): zirve anında metin çoğu zaman "of / yok artık / bitti" gibi birkaç kelimedir, bilgi taşımaz. Ses heyecanına ve canlı sohbet patlamalarına bak; dökümü sadece ne olduğunu doğrulamak için kullan
+- **Görüntü odaklı olanlar** (dans / şarkı / manzara): döküm neredeyse boştur. "Kulağa hoş geliyor" diye bir cümleyi asla seçme — seyircinin izlediği şey o değil. Görüntü enerjisi, müziğin vuruşu ve sohbete göre karar ver
+Emin olamıyorsan "sözü içerik olanlar" gibi davran — ama boş lakırdıyı alıntı gibi paketleme.
+
+【Vuruşları izlenme olasılığına göre, yüksekten aşağıya ara】
+1. Kendini yalanlama / çelişki: aynı kişi önce bir şey deyip sonra tersini söylüyor — "asla indirim yapmıyoruz" deyip indirim yapmak, önce övüp sonra gömmek, verdiği sözle yaptığının uyuşmaması, çifte standart. En güçlü kanca budur; dökümün birbirinden çok uzak iki noktasından çıkarmaya değer
+2. Çatışma ve gerilim: cevaplamak istemediği soru, canlı yayında birine itiraz, ters giden bir şey, kaza, gerçek bir tartışma
+3. Karşı-sezgi tek cümle: alışılmışın tersini söyleyen, tek başına dolaşabilen bir cümle ("çok çalışan daha az kazanıyor" gibi)
+4. Duygu zirvesi: sesin yükselmesi, gözlerin dolması, samimi bir an, ani düşüş — tonun kendisi içeriktir
+5. Espri: sadece tam bir "kurulum → vuruş" birimi olarak. Seyirci gülüyor ama asıl cümle yoksa o kesit ASLA olmaz
+6. Yoğun, kaydedilesi bilgi: yöntem, liste, somut rakamlar (platformlar artık kaydetmeyi en çok ödüllendiriyor)
+7. Canlı satışa özel: ürünün beklenmedik tepki vermesi, fiyatın açıklandığı an, denemenin ters gitmesi, içerik/iade konusunda sıkıştırılması
+
+【İlk cümle her şeyi belirler】
+Kesitin açılış cümlesi kancayı kendi taşımalı. Türkçede parmağı durduran kalıplar:
+- Karşı-sezgi / itiraf (en güçlüsü): "Bunu kimse söylemiyor ama…", "… yapmayı bırak", "Herkes … sanıyor, gerçek şu ki…", "Bunu bilseydin … yapmazdın"
+- Sonuç farkı: "… ayda …'a ulaştım", "…'dan …'a", "Meğer …"
+- Merak: "Az önce ne oldu biliyor musun?", "Bu videoyu kaydet, sonra teşekkür edersin", "Sakın … yapma"
+- Dert noktası: "Sen de … mı yaşıyorsun?", "İnsanların %90'ı bunu bilmiyor"
+Selamlama, kendini tanıtma, "şimdi sıradaki konuya geçelim", yavaş giriş — kesitin açılışı bunlar asla olmaz.
+
+【Süre】
+Süre 8–40 saniye (kabaca 2–8 cümle).
+
+【İki an birbirinden uzaksa "parts" ZORUNLU】
+Kesitlerin neredeyse tamamı tek bir akıştır — quoteStart/quoteEnd yeter.
+Ama seçmek istediğin iki an **aralarında uzun ve alakasız bir bölüm** varsa (1. kategori, kendini yalanlama, neredeyse her zaman böyledir: söz başta, çelişki on dakika sonra), her birini ayrı çerçeveleyen bir "parts" dizisi ÜRETMELİSİN.
+⚠ Bu isteğe bağlı değil: bunun yerine startSegmentId'yi erken cümleye, endSegmentId'yi sonraki cümleye verirsen sistem aradaki HER ŞEYİ kesite katar — süre limiti aşılır ve aday elenir, bulduğun kanca boşa gider.
+parts nasıl yazılır:
+- Kaynak zamana göre sırayla 2–3 parça listele; bu sıra aynı zamanda oynatma sırasıdır — asla ters çevirme
+- Her parça tam ve kesilmemiş bir düşünce olmalı (en az 2 saniye); parçaların TOPLAMI yukarıdaki süre şartını yine sağlamalı (aradaki boşluk sayılmaz — sadece gerçekten kesilen kısım sayılır)
+- "parts" varken üst düzey alanları yine doldur: startSegmentId/quoteStart ilk parçadan, endSegmentId/quoteEnd son parçadan
+- Birleştirme asla olmayan bir anlam üretmemeli. Aradaki boşlukta anlamı tersine çeviren bir "ama/fakat" varsa ya da ikinci parça aslında başka bir şeyden bahsediyorsa birleştirme — adayı bırak. Şüphedeysen tek ve kesintisiz bir kesit seç
+
+【Katı kurallar】
+1. SADECE dökümün kendisinden seç: quoteStart/quoteEnd birebir kopyalanmalı (noktalama dahil) — asla yeniden yazma, asla uydurma
+2. quoteStart = kesitin ilk cümlesinin ilk kelimeleri (≥6 kelime/karakter); quoteEnd = son cümlesinin son kelimeleri (≥6 kelime/karakter)
+3. startSegmentId/endSegmentId dökümdeki **gerçek [id] numaraları** olmalı (ilk satır [21] ise 21 yaz) — asla -1, 0 ya da boş bırakma; score 0-100 tam sayı olmalı, o da -1 olamaz
+4. "ss:dd:dd" gibi saat damgası yazma — zamanı sistem alıntıladığın metinden geri bulur; ama yukarıdaki iki cümle id'si ve score ZORUNLU, onları da atlama
+5. Kesitler birbiriyle çakışmamalı; nitelik nicelikten önce gelir — kanca potansiyeli olmayan içeriği zorla ekleme
+6. Cımbızlama yasak: kesilen anlam gerçekten söylenenle aynı olmalı. Cümleyi yarıda keserek üretilen "kanca" hesaba zarar verir
+7. title/hook/reason dökümün diliyle (Türkçe) yazılmalı`;
+
 /** zh when the engine says so or the text itself is CJK-dominant. */
 export function isChineseTranscript(transcript: Transcript): boolean {
   const lang = transcript.language.toLowerCase();
@@ -133,6 +185,41 @@ export function isChineseTranscript(transcript: Transcript): boolean {
   return sample.length > 0 && cjk / sample.length > 0.3;
 }
 
+/** Which prompt set a transcript should use. */
+export type PromptLang = "zh" | "tr" | "en";
+
+/**
+ * Letters that only Turkish uses among the Latin-script languages we cover
+ * (dotless ı, dotted capital İ, soft g, s with cedilla). Two of them in a
+ * sample is already conclusive — they do not appear in English, Spanish,
+ * German or French text.
+ */
+const TURKISH_LETTERS_RE = /[ıİğĞşŞ]/;
+
+/** Turkish when the engine says so, or when the text itself is Turkic. */
+export function isTurkishTranscript(transcript: Transcript): boolean {
+  const lang = transcript.language.toLowerCase();
+  if (lang.startsWith("tr")) return true;
+  if (lang && lang !== "auto") return false;
+  const sample = transcript.segments
+    .slice(0, 20)
+    .map((s) => s.text)
+    .join("");
+  const hits = sample.match(new RegExp(TURKISH_LETTERS_RE, "g")) ?? [];
+  return sample.length > 0 && hits.length >= 2;
+}
+
+/**
+ * One language decision for every prompt that gets built for this transcript.
+ * Chinese keeps its own prompt; Turkish gets Turkish hook formulas rather than
+ * translated English ones; everything else falls back to English.
+ */
+export function promptLanguage(transcript: Transcript): PromptLang {
+  if (isChineseTranscript(transcript)) return "zh";
+  if (isTurkishTranscript(transcript)) return "tr";
+  return "en";
+}
+
 export function highlightSystemPrompt(
   transcript: Transcript,
   length: ClipLength = "standard",
@@ -143,18 +230,22 @@ export function highlightSystemPrompt(
   brief?: { focus?: string; exclude?: string },
   performanceMemory?: PerformanceEntry[]
 ): string {
-  const zh = isChineseTranscript(transcript);
-  let base = zh ? HIGHLIGHT_SYSTEM_PROMPT_ZH : HIGHLIGHT_SYSTEM_PROMPT_EN;
+  const lang = promptLanguage(transcript);
+  const zh = lang === "zh";
+  let base =
+    lang === "zh" ? HIGHLIGHT_SYSTEM_PROMPT_ZH : lang === "tr" ? HIGHLIGHT_SYSTEM_PROMPT_TR : HIGHLIGHT_SYSTEM_PROMPT_EN;
   if (length === "extended") {
     base = base
       .replace(/时长 8~40 秒[^\n]*/, "时长 60~120 秒。围绕完整主题选足铺垫、演示和结论,不要为了缩短而截断内容。")
-      .replace(/Length 8–40 seconds[^\n]*/, "Length 60–120 seconds. Include a complete setup, demonstration and conclusion.");
+      .replace(/Length 8–40 seconds[^\n]*/, "Length 60–120 seconds. Include a complete setup, demonstration and conclusion.")
+      .replace(/Süre 8–40 saniye[^\n]*/, "Süre 60–120 saniye. Konuyu baştan sona kuşat: hazırlık, gösterim ve sonuç eksiksiz olsun; kısaltmak için içeriği kesme.");
   } else if (length !== "standard") {
     // 时长行按档改写(硬约束进 system prompt,选段时就按目标节奏挑)
     const { minSec, maxSec } = CLIP_LENGTH_RANGES[length];
     base = base
       .replace("时长 8~40 秒", `时长 ${minSec}~${maxSec} 秒(硬要求,宁短勿超)`)
-      .replace("Length 8–40 seconds", `Length ${minSec}–${maxSec} seconds (hard requirement)`);
+      .replace("Length 8–40 seconds", `Length ${minSec}–${maxSec} seconds (hard requirement)`)
+      .replace("Süre 8–40 saniye", `Süre ${minSec}–${maxSec} saniye (katı kural, kısa kalması uzamasından iyidir)`);
   }
   // 品类判据:不同品类连"该信哪路证据"都不一样,放在通用判据之后覆盖它
   if (genre) base += genreSection(genre.id, zh, genre.custom);
@@ -288,6 +379,12 @@ const PARTS_SHAPE_EN = `When a clip genuinely needs stitching (only the one that
   {"startSegmentId": 88, "endSegmentId": 90, "quoteStart": "...", "quoteEnd": "..."}
 ]`;
 
+const PARTS_SHAPE_TR = `Bir kesit gerçekten birleştirme gerektiriyorsa (yalnızca öncesi/sonrası karşıtlığı gereken o tek aday), SADECE o clip içine bir "parts" alanı ekle; gerekmiyorsa bu alan hiç görünmesin:
+"parts": [
+  {"startSegmentId": 12, "endSegmentId": 13, "quoteStart": "...", "quoteEnd": "..."},
+  {"startSegmentId": 88, "endSegmentId": 90, "quoteStart": "...", "quoteEnd": "..."}
+]`;
+
 function fmtClock(sec: number): string {
   const m = Math.floor(sec / 60);
   const ss = Math.floor(sec % 60);
@@ -360,20 +457,24 @@ export function renderSignals(signals: MediaSignals | undefined, zh: boolean): s
 }
 
 /** Multi-speaker attribution guidance, injected only when diarized ≥2 speakers. */
-function speakerNote(transcript: Transcript, zh: boolean): string {
+function speakerNote(transcript: Transcript, lang: PromptLang): string {
   if (!isMultiSpeaker(transcript)) return "";
-  return zh
+  if (lang === "tr") {
+    return `\n【Çok konuşmacılı】Her satırın başındaki S1/S2... kimin konuştuğunu gösterir. Tek bir kişinin tam bir düşüncesini tercih et; güzel bir soru-cevap için konuşmacı atlayabilirsin ama sorunun ve cevabın tamamı içeride kalsın — iki kişinin yarım cümlesini birleştirip anlamı kaydırma.\n`;
+  }
+  return lang === "zh"
     ? `\n【多人对谈】每句前的 S1/S2… 是说话人标签。挑段时优先选「同一个人一段完整的话」;若是精彩问答,可跨说话人但要含完整的一问一答,别把两个人的半句拼成断章取义。\n`
     : `\n【Multi-speaker】The S1/S2… prefix on each line marks who is speaking. Prefer a single speaker's complete thought; for a great Q&A you may span speakers but keep the full exchange — never stitch two half-sentences into a misleading clip.\n`;
 }
 
 export function buildHighlightPrompt(transcript: Transcript, maxClips = 6, signals?: MediaSignals): string {
-  if (isChineseTranscript(transcript)) {
+  const lang = promptLanguage(transcript);
+  if (lang === "zh") {
     return `请从下面的逐句稿中挑出最多 ${maxClips} 个最有爆款潜质的片段。
 
 【逐句稿】(格式: [句id] 开始时间 内容)
 ${renderTranscriptLines(transcript)}
-${speakerNote(transcript, true)}${renderSignals(signals, true)}
+${speakerNote(transcript, lang)}${renderSignals(signals, true)}
 【输出格式】严格输出 JSON,不要任何多余文字:
 ${OUTPUT_SHAPE}
 
@@ -382,11 +483,25 @@ ${PARTS_SHAPE_ZH}
 字段说明:title=适合发布的短标题(≤20字);hook=开头钩子句原文;score=0-100 相对排序分;reason=一句话为什么能爆;quoteStart/quoteEnd=片段首句开头/末句结尾的逐字原文;keywords=该片段里 3-5 个最有冲击力的词,必须逐字取自片段原文(用于字幕划重点)。
 要求:按 score 从高到低排;片段互不重叠。`;
   }
+  if (lang === "tr") {
+    return `Aşağıdaki dökümden izlenme potansiyeli en yüksek, en fazla ${maxClips} kesit adayını seç.
+
+【Döküm】(biçim: [cümleId] başlangıç saati metin)
+${renderTranscriptLines(transcript)}
+${speakerNote(transcript, lang)}${renderSignals(signals, false)}
+【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:
+${OUTPUT_SHAPE}
+
+${PARTS_SHAPE_TR}
+
+Alanlar: title = yayına hazır kısa başlık (≤ 8 kelime); hook = kesitin açılışındaki kanca cümlesinin aynen hali; score = 0-100 göreli sıralama puanı; reason = tek cümlede neden izlenir; quoteStart/quoteEnd = kesitin ilk cümlesinin başı ve son cümlesinin sonu, birebir; keywords = kesitin içindeki en çarpıcı 3-5 kelime, mutlaka dökümden birebir kopyalanmalı (altyazıda vurgu için kullanılır).
+score yüksekten aşağıya sırala; kesitler birbiriyle çakışmasın.`;
+  }
   return `Pick at most ${maxClips} clip candidates with the highest viral potential from the transcript below.
 
 【Transcript】(format: [sentenceId] startTime text)
 ${renderTranscriptLines(transcript)}
-${speakerNote(transcript, false)}${renderSignals(signals, false)}
+${speakerNote(transcript, lang)}${renderSignals(signals, false)}
 【Output format】Respond with STRICT JSON only, no extra text:
 ${OUTPUT_SHAPE}
 
@@ -438,6 +553,26 @@ So you are NOT asked to quote anything. The system has already used audio and vi
 6. score is an integer 0-100, required, never -1
 7. Write title/hook/reason in the same language as the attached transcript (Chinese when it is empty)`;
 
+export const MOMENT_SYSTEM_PROMPT_TR = `Sen kısa video kurgusunda uzman bir stratejistsin. Bu yayının dökümü neredeyse hiç bilgi taşımıyor — dans, performans, şarkı, saha ya da oyun içeriği; seyirci kelimeler için değil görüntü ve tepki için izliyor.
+
+Bu yüzden senden alıntı yapmanı istemiyoruz. Sistem ses ve görüntü sinyalleriyle bazı "yüksek enerjili anlar"ı numaraladı. Senin işin: gerçekten kesmeye değer olanları seçmek ve onlara başlık ile kanca yazmak.
+
+【Bir an nasıl değerlendirilir】
+- Görüntü enerjisi / yoğun plan geçişi → büyük olasılıkla aksiyonun, gösterinin ya da performansın zirvesi
+- Canlı sohbet patlaması → seyirci o anda gerçekten tepki verdi; elimizdeki en sert kanıt budur (seyirci neyin iyi olduğunu anlık oylayarak söylüyor)
+- Ses heyecanı / gülüşme / alkış → yayıncı ya da ortam o anda patladı
+- Tek başına ses yüksekliği, yanında başka hiçbir şey yok → çoğu zaman sadece müzik ya da ortam gürültüsü. Şüpheci ol
+- Kanıt türleri birbirini ne kadar doğruluyorsa o kadar güvenilir; tek sinyalli anları serbestçe ele
+
+【Katı kurallar】
+1. SADECE verilen anlardan seç; momentId listedeki gerçek numara olmalı — asla saat uydurma
+2. Nitelik nicelikten önce: bir yayında genelde kesmeye değer iki üç an olur, sırf liste dolsun diye sıradan anları yüksek enerjili diye sunma
+3. Ekli döküm sadece referanstır — boş olabilir, bozuk ASR olabilir (saha sesi kötüdür). **"Kulağa hoş geliyor" diye an seçme** ve okunamayan transkripti içerik sayma
+4. title, insanın gerçekten dokunacağı türden olmalı, "Vurgu 1" gibi değil; kullanılabilir diyalog yoksa ekranda ne olduğunu anlat
+5. hook = kesitin açıldığı görüntü ya da o hareket, tek cümle. Diyalog uydurma
+6. score 0-100 tam sayı, zorunlu, asla -1 değil
+7. title/hook/reason ekli dökümün diliyle yaz (döküm boşsa Türkçe)`;
+
 const MOMENT_SHAPE = `{
   "clips": [
     { "momentId": 3, "title": "...", "hook": "...", "score": 88, "reason": "...", "keywords": ["...", "..."] }
@@ -445,15 +580,15 @@ const MOMENT_SHAPE = `{
 }`;
 
 /** 信号种类 → 人话标签(证据链既给 LLM 看,也给用户看)。 */
-export const EVIDENCE_LABELS: Record<string, { zh: string; en: string }> = {
-  loud: { zh: "响度峰值", en: "loudness peak" },
-  cut: { zh: "镜头切换密集", en: "dense scene cuts" },
-  motion: { zh: "画面运动", en: "motion activity" },
-  visual: { zh: "画面高能(视觉模型)", en: "visual energy (vision model)" },
-  emotion: { zh: "人脸表情峰值", en: "facial-emotion peak" },
-  voice: { zh: "语气激动", en: "vocal-emotion peak" },
-  audioEvent: { zh: "笑声/掌声", en: "laughter/applause" },
-  danmaku: { zh: "弹幕峰值", en: "live-chat spike" },
+export const EVIDENCE_LABELS: Record<string, { zh: string; tr: string; en: string }> = {
+  loud: { zh: "响度峰值", tr: "ses yüksekliği zirvesi", en: "loudness peak" },
+  cut: { zh: "镜头切换密集", tr: "yoğun plan geçişi", en: "dense scene cuts" },
+  motion: { zh: "画面运动", tr: "görüntü hareketi", en: "motion activity" },
+  visual: { zh: "画面高能(视觉模型)", tr: "görüntü enerjisi (görsel model)", en: "visual energy (vision model)" },
+  emotion: { zh: "人脸表情峰值", tr: "yüz ifadesi zirvesi", en: "facial-emotion peak" },
+  voice: { zh: "语气激动", tr: "ses heyecanı", en: "vocal-emotion peak" },
+  audioEvent: { zh: "笑声/掌声", tr: "gülüşme/alkış", en: "laughter/applause" },
+  danmaku: { zh: "弹幕峰值", tr: "canlı sohbet patlaması", en: "live-chat spike" },
 };
 
 /**
@@ -472,20 +607,38 @@ export interface PromptMoment {
   text: string;
 }
 
-export function buildMomentPrompt(moments: PromptMoment[], maxClips: number, zh: boolean): string {
+/** The moment-channel system prompt for a language decision (detect.ts entry point). */
+export function momentSystemPrompt(lang: PromptLang): string {
+  if (lang === "zh") return MOMENT_SYSTEM_PROMPT_ZH;
+  if (lang === "tr") return MOMENT_SYSTEM_PROMPT_TR;
+  return MOMENT_SYSTEM_PROMPT_EN;
+}
+
+export function buildMomentPrompt(moments: PromptMoment[], maxClips: number, lang: PromptLang): string {
+  const zh = lang === "zh";
   const lines = moments
     .map((m) => {
-      const ev = m.evidence.map((e) => EVIDENCE_LABELS[e]?.[zh ? "zh" : "en"] ?? e).join(zh ? "、" : ", ");
+      const ev = m.evidence
+        .map((e) => {
+          const label = EVIDENCE_LABELS[e];
+          if (!label) return e;
+          return zh ? label.zh : lang === "tr" ? label.tr : label.en;
+        })
+        .join(zh ? "、" : ", ");
       const dur = Math.round(m.endSec - m.startSec);
       const raw = m.text.trim().replace(/\s+/g, " ");
       const text = raw.length > MOMENT_TEXT_MAX_CHARS ? `${raw.slice(0, MOMENT_TEXT_MAX_CHARS)}…` : raw;
-      return zh
-        ? `[${m.id}] ${fmtClock(m.startSec)}-${fmtClock(m.endSec)}(${dur}秒)\n  证据:${ev || "(无)"}\n  该时段原话:${text || "(没有台词)"}`
-        : `[${m.id}] ${fmtClock(m.startSec)}-${fmtClock(m.endSec)} (${dur}s)\n  Evidence: ${ev || "(none)"}\n  Transcript here: ${text || "(no dialogue)"}`;
+      if (zh) {
+        return `[${m.id}] ${fmtClock(m.startSec)}-${fmtClock(m.endSec)}(${dur}秒)\n  证据:${ev || "(无)"}\n  该时段原话:${text || "(没有台词)"}`;
+      }
+      if (lang === "tr") {
+        return `[${m.id}] ${fmtClock(m.startSec)}-${fmtClock(m.endSec)} (${dur} sn)\n  Kanıt: ${ev || "(yok)"}\n  Bu aralıktaki konuşma: ${text || "(diyalog yok)"}`;
+      }
+      return `[${m.id}] ${fmtClock(m.startSec)}-${fmtClock(m.endSec)} (${dur}s)\n  Evidence: ${ev || "(none)"}\n  Transcript here: ${text || "(no dialogue)"}`;
     })
     .join("\n");
-  return zh
-    ? `下面是系统按画面与声音信号圈出的高能时刻,请从中挑出最多 ${maxClips} 个值得剪成短视频的。
+  if (zh) {
+    return `下面是系统按画面与声音信号圈出的高能时刻,请从中挑出最多 ${maxClips} 个值得剪成短视频的。
 
 【高能时刻清单】
 ${lines}
@@ -494,8 +647,21 @@ ${lines}
 ${MOMENT_SHAPE}
 
 字段说明:momentId=上面清单里的编号(必须真实存在);title=适合发布的短标题(≤20字);hook=开头呈现的画面/动作(一句话);score=0-100 相对排序分;reason=一句话为什么值得剪(要说清你信的是哪路证据);keywords=2-5 个描述这条内容的词(用于发布文案话题)。
-按 score 从高到低排;宁可少给几条,也不要把平淡时刻硬说成高能。`
-    : `Below are high-energy moments marked by audio and visual signals. Pick at most ${maxClips} worth cutting.
+按 score 从高到低排;宁可少给几条,也不要把平淡时刻硬说成高能。`;
+  }
+  if (lang === "tr") {
+    return `Aşağıda sistemin ses ve görüntü sinyalleriyle işaretlediği yüksek enerjili anlar var. Bunlardan en fazla ${maxClips} tanesini kısa videoya kesmeye değer olanlar arasından seç.
+
+【Yüksek enerjili anlar listesi】
+${lines}
+
+【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:
+${MOMENT_SHAPE}
+
+Alanlar: momentId = yukarıdaki listedeki gerçek numara; title = yayına hazır kısa başlık (≤ 8 kelime); hook = kesitin açılışında görünecek görüntü ya da hareket, tek cümle; score = 0-100 göreli sıralama puanı; reason = tek cümlede neden kesmeye değer (hangi kanıta güvendiğini yaz); keywords = bu içeriği tanımlayan 2-5 kelime (paylaşım etiketleri için).
+score yüksekten aşağıya sırala; az ama güçlü aday döndürmek listeyi doldurmaktan iyidir.`;
+  }
+  return `Below are high-energy moments marked by audio and visual signals. Pick at most ${maxClips} worth cutting.
 
 【Moments】
 ${lines}
@@ -542,8 +708,23 @@ Finish each clip with a ZERO-CONTEXT verdict — pretend you never saw the strea
 - "drop": not worth publishing — incomplete thought, filler, quote-mined, or incomprehensible on its own
 Judge "drop" without mercy: 30-45% of AI picks being duds is the industry reality, and posting duds throttles the whole account. You are the final quality gate. Keep filling keep (true for publish, false otherwise).`;
 
+export const REVIEW_SYSTEM_PROMPT_TR = `Sen acımasız bir kısa video içerik denetçisisin. Sana önceden kesilmiş aday kesitler veriliyor; her birini hiç görmemiş bir yabancı gözüyle, kaydırıp geçen biri gibi değerlendir. DÖRT boyuta ayrı ayrı 0-100 puan ver ve her boyuta tek cümle gerekçe yaz:
+- hook: İlk cümle 3 saniye içinde kaydırmayı durduruyor mu? Düz ve sıradan açılışlar direkt kalır.
+- flow: Cımbızlama var mı? Cümle ortasında mı başlıyor, sonu oturuyor mu? Akıyor mu? Kesit metninde "......" varsa bu kesit birbirinden uzak iki andan birleştirilmiştir — onları daha sert ölç: birleşen anlam gerçekten söylenenle aynı mı, yoksa aradakiler atlanarak olmayan bir çelişki mi üretilmiş? Zorlama birleştirme keep=false alır.
+- value: kaynak videoyu bilmeden, bu kesit bilgi ya da duygu olarak sonuna kadar izlenmeye değer mi?
+- trend: konu/duygu şu anda platformlarda dönen şeye oturuyor mu?
+Her kesit için ayrıca bir teaser yaz: ≤6 kelimelik, videonun üstüne metin kancası olarak basılabilecek merak cümlesi — merak uyandırsın, spoiler vermesin.
+Her kesit için "sıfır bağlam" kararını ver — yayını hiç görmemiş gibi davran ve sadece bu kesiti izle: takip edebiliyor musun, sonu bir son gibi oturuyor mu? Üç kademeden birini yaz:
+- "publish": olduğu gibi yayınlanabilir — tek başına anlaşılıyor, açılış parmağı durduruyor, sonu oturuyor
+- "review": düzeltilebilir bir kusuru var, insan bakmalı (cümle ortasında başlıyor / sonu oturmuyor / biraz bağlam gerekiyor / birleştirme biraz zorlama) — kusuru note içinde söyle
+- "drop": yayınlanmaya değmez — tamamlanmamış düşünce, dolgu, cımbızlama ya da tek başına anlaşılmaz
+"drop" demekten çekinme: yapay zekâ seçimlerinin %30-45'i çöp çıkıyor ve bu sektörün gerçeği; çöp yayınlamanın bedelini bütün hesap ödüyor. Yayın öncesi son kalite kapısı sensin. keep alanını doldurmaya devam et (publish için true, kalanı false).`;
+
 export function reviewSystemPrompt(transcript: Transcript): string {
-  return isChineseTranscript(transcript) ? REVIEW_SYSTEM_PROMPT_ZH : REVIEW_SYSTEM_PROMPT_EN;
+  const lang = promptLanguage(transcript);
+  if (lang === "zh") return REVIEW_SYSTEM_PROMPT_ZH;
+  if (lang === "tr") return REVIEW_SYSTEM_PROMPT_TR;
+  return REVIEW_SYSTEM_PROMPT_EN;
 }
 
 const REVIEW_SHAPE = `{
@@ -582,7 +763,9 @@ function contextAround(transcript: Transcript, startSec: number, endSec: number)
 }
 
 export function buildReviewPrompt(transcript: Transcript, clips: ReviewableClip[]): string {
-  const zh = isChineseTranscript(transcript);
+  const lang = promptLanguage(transcript);
+  const zh = lang === "zh";
+  const tr = lang === "tr";
   const blocks = clips
     .map((c) => {
       const ctx = contextAround(transcript, c.startSec, c.endSec);
@@ -590,14 +773,24 @@ export function buildReviewPrompt(transcript: Transcript, clips: ReviewableClip[
       const stitched = isStitched(c.pieces)
         ? zh
           ? `(${c.pieces!.length} 段拼接)`
-          : ` (${c.pieces!.length}-part stitch)`
+          : tr
+            ? ` (${c.pieces!.length} parçalı birleştirme)`
+            : ` (${c.pieces!.length}-part stitch)`
         : "";
-      return zh
-        ? `【候选 ${c.id}】《${c.title}》 时长${dur}秒${stitched}\n前文:${ctx.before || "(无)"}\n片段:${c.text}\n后文:${ctx.after || "(无)"}`
-        : `【Candidate ${c.id}】"${c.title}" ${dur}s${stitched}\nBefore: ${ctx.before || "(none)"}\nClip: ${c.text}\nAfter: ${ctx.after || "(none)"}`;
+      if (zh) {
+        return `【候选 ${c.id}】《${c.title}》 时长${dur}秒${stitched}\n前文:${ctx.before || "(无)"}\n片段:${c.text}\n后文:${ctx.after || "(无)"}`;
+      }
+      if (tr) {
+        return `【Aday ${c.id}】"${c.title}" ${dur} sn${stitched}\nÖncesi: ${ctx.before || "(yok)"}\nKesit: ${c.text}\nSonrası: ${ctx.after || "(yok)"}`;
+      }
+      return `【Candidate ${c.id}】"${c.title}" ${dur}s${stitched}\nBefore: ${ctx.before || "(none)"}\nClip: ${c.text}\nAfter: ${ctx.after || "(none)"}`;
     })
     .join("\n\n");
-  return zh
-    ? `逐条盲评下面的候选片段。hook/flow/value/trend 四维各 0-100 打分(横向比较)+ 各一句话理由;teaser=≤15字悬念句(勾人不剧透,逐句稿同款语言);verdict=质量门三档(publish/review/drop,判法见系统要求);keep 与 verdict 对应(publish=true,其余 false);note=一句话总评(review/drop 必须说清具体硬伤)。\n\n${blocks}\n\n【输出格式】严格输出 JSON,不要任何多余文字:\n${REVIEW_SHAPE}`
-    : `Blind-review each candidate below. Score hook/flow/value/trend 0-100 each (relative) with a one-line reason per dimension; teaser = a ≤8-word suspense line (intriguing, no spoilers, transcript language); verdict = the three-tier gate (publish/review/drop, per the system rules); keep mirrors verdict (true only for publish); note = one-line overall verdict (must name the flaw for review/drop).\n\n${blocks}\n\n【Output format】STRICT JSON only:\n${REVIEW_SHAPE}`;
+  if (zh) {
+    return `逐条盲评下面的候选片段。hook/flow/value/trend 四维各 0-100 打分(横向比较)+ 各一句话理由;teaser=≤15字悬念句(勾人不剧透,逐句稿同款语言);verdict=质量门三档(publish/review/drop,判法见系统要求);keep 与 verdict 对应(publish=true,其余 false);note=一句话总评(review/drop 必须说清具体硬伤)。\n\n${blocks}\n\n【输出格式】严格输出 JSON,不要任何多余文字:\n${REVIEW_SHAPE}`;
+  }
+  if (tr) {
+    return `Aşağıdaki adayları tek tek kör değerlendirmeden geçir. hook/flow/value/trend dört boyutun her birine 0-100 puan ver (birbirine göre kıyaslayarak) ve her boyuta tek cümle gerekçe yaz; teaser = ≤6 kelimelik merak cümlesi (merak uyandırır, spoiler vermez, dökümün diliyle); verdict = kalite kapısı üç kademesi (publish/review/drop, kurallar sistem mesajında); keep, verdict ile uyumlu olsun (sadece publish için true); note = tek cümlelik genel değerlendirme (review/drop için kusuru mutlaka söyle).\n\n${blocks}\n\n【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:\n${REVIEW_SHAPE}`;
+  }
+  return `Blind-review each candidate below. Score hook/flow/value/trend 0-100 each (relative) with a one-line reason per dimension; teaser = a ≤8-word suspense line (intriguing, no spoilers, transcript language); verdict = the three-tier gate (publish/review/drop, per the system rules); keep mirrors verdict (true only for publish); note = one-line overall verdict (must name the flaw for review/drop).\n\n${blocks}\n\n【Output format】STRICT JSON only:\n${REVIEW_SHAPE}`;
 }
