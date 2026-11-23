@@ -19,7 +19,7 @@ import { loadReviewMemory } from "../core/review-memory";
 import { loadPerformanceMemory } from "../core/performance-memory";
 import { handleMcpMessage, type JsonRpcMessage } from "./protocol";
 import { parseGenre } from "../core/genre";
-import { isClipLength } from "../shared/detection-options";
+import { isClipLength, MAX_CLIPS } from "../shared/detection-options";
 
 function fmtClock(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -28,7 +28,7 @@ function fmtClock(sec: number): string {
 
 function clampClips(n: unknown): number | undefined {
   const v = Number(n);
-  return Number.isFinite(v) ? Math.max(1, Math.min(12, Math.round(v))) : undefined;
+  return Number.isFinite(v) ? Math.max(1, Math.min(MAX_CLIPS, Math.round(v))) : undefined;
 }
 
 /**

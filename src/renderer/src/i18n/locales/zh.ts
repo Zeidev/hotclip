@@ -693,7 +693,7 @@ export const zh = {
     paramMaxClips: "最多切片数量",
     lengthExtended: "1–2 分钟 (60–120 秒)",
     secondsUnit: "秒",
-    selectionLimitsHint: "数量为候选上限,不足时不凑数。时长指选段;导出剪气口等处理后可能缩短。",
+    selectionLimitsHint: "数量为候选上限,不足时不凑数。时长指选段;导出剪气口等处理后可能缩短。超过 12 条会分段扫描整条时间线,更慢也更费额度。",
     watchSelectionHint: "启动时保存这些参数,用于之后的新录播。修改后请重启监听;失败任务重试沿用原参数。",
     lengthShortSeg: "短",
     lengthStandardSeg: "标准",

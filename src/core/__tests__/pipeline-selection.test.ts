@@ -78,15 +78,17 @@ describe("selection controls reach actual detection and export", () => {
     expect(genrePauseGapSec(exported[3]?.genreId)).toBe(0.45);
   });
 
-  it("keeps the default general prompt, six-candidate ceiling and default export rhythm", async () => {
+  it("keeps the default general prompt, twelve-candidate ceiling and default export rhythm", async () => {
     // Shorten the fixture so the unchanged standard duration accepts it.
     const short = { ...transcript, segments: transcript.segments.map((s) => ({ ...s, endSec: s.startSec + 20 })) };
     vi.mocked(importSubtitleFile).mockResolvedValue(short);
     const result = await autoClip("/source.mp4", config);
     expect(requests[0].messages[0].content).toContain("时长 8~40 秒");
     expect(requests[0].messages[0].content).not.toContain("【本场类型与判据】");
-    expect(requests[0].messages[1].content).toContain("最多 6 个");
-    expect(result.candidates).toHaveLength(6);
+    expect(requests[0].messages[1].content).toContain("最多 12 个");
+    // The default ceiling stays inside the single-pass path: one stage-1 call.
+    expect(requests).toHaveLength(2);
+    expect(result.candidates).toHaveLength(12);
     expect(vi.mocked(exportClips).mock.calls[0][3]?.genreId).toBeUndefined();
   });
 
@@ -103,7 +105,7 @@ describe("selection controls reach actual detection and export", () => {
     expect(importSubtitleFile).not.toHaveBeenCalled();
     expect(() => validateDetectionOptions({ clipLength: "toString" })).toThrow(/clipLength/);
     expect(() => validateDetectionOptions({ genre: { custom: 5 } })).toThrow(/string/);
-    expect(validateDetectionOptions({ maxClips: NaN }).maxClips).toBe(6);
+    expect(validateDetectionOptions({ maxClips: NaN }).maxClips).toBe(12);
     expect(detectionOptionsFromPrefs({ clipLength: "extended", maxClips: 10, genreId: "gaming", genreCustom: "" }).genre?.id).toBe("game");
   });
 

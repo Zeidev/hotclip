@@ -75,8 +75,8 @@ describe("parseCliArgs (CLI 参数解析)", () => {
     expect(a.json).toBe(true);
   });
 
-  it("--max-clips 钳到 1..12(与 MCP 同一约束)", () => {
-    expect(parseCliArgs(["clip", "/v/a.mp4", "--max-clips", "99"]).maxClips).toBe(12);
+  it("--max-clips 钳到 1..40(与 MCP 同一约束)", () => {
+    expect(parseCliArgs(["clip", "/v/a.mp4", "--max-clips", "99"]).maxClips).toBe(40);
     expect(parseCliArgs(["clip", "/v/a.mp4", "--max-clips", "0"]).maxClips).toBe(1);
   });
 

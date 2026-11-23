@@ -6,7 +6,7 @@
 import { create } from "zustand";
 import type { CaptionStyleChoice, ClipLength, ExportQuality } from "../../../shared/api-types";
 import { validPlatformIds } from "../../../shared/platform-specs";
-import { isClipLength, normalizeMaxClips } from "../../../shared/detection-options";
+import { DEFAULT_MAX_CLIPS, isClipLength, normalizeMaxClips } from "../../../shared/detection-options";
 import { DEFAULT_SENSITIVE_WORDS, sanitizeSensitiveWords } from "../../../core/sensitive-words";
 
 const STORAGE_KEY = "hotclip-render-prefs";
@@ -131,7 +131,7 @@ export const RENDER_PREF_DEFAULTS: RenderPrefs = {
   packPlatforms: ["douyin", "xiaohongshu", "channels"], // 中文矩阵最常见的三件套
   variants: 1, // 多版=多倍导出时间+一次 LLM 调用,默认关
   clipLength: "standard",
-  maxClips: 6,
+  maxClips: DEFAULT_MAX_CLIPS,
   genreId: "auto", // 出厂不指定品类:通用提示词里已让模型先自判内容类型
   genreCustom: "",
   briefFocus: "", // 点题出厂为空:不点题就按通用判据找

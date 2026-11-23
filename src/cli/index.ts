@@ -22,7 +22,7 @@ import { ensureModel } from "../core/models";
 import { loadReviewMemory } from "../core/review-memory";
 import { importPerformanceFile, loadPerformanceMemory, performanceReport } from "../core/performance-memory";
 import { parseGenre } from "../core/genre";
-import { isClipLength } from "../shared/detection-options";
+import { isClipLength, MAX_CLIPS } from "../shared/detection-options";
 import { isLocalAsrEngineId, LOCAL_ASR_ENGINE_IDS } from "../shared/asr-engines";
 import type { DetectionOptions } from "../shared/api-types";
 
@@ -55,7 +55,7 @@ const USAGE = `HotClip CLI —— 本地 AI 切片,素材不出电脑
       --genre <id>           直播品类;默认 auto,非法值会列出全部可选项
       --genre-custom <文本> 自定义判据,非空时覆盖所选品类的内置判据
       --clip-length <档位>   short=10-30s / standard=8-40s / long=40-90s / extended=60-120s
-      --max-clips N          最多 1-12 条(默认 6);不足时保留实际候选,不凑数
+      --max-clips N          最多 1-40 条(默认 12);不足时保留实际候选,不凑数;超过 12 条会分窗口多次选段(更慢、更贵,但覆盖整条时间线)
 
   pnpm cli doctor [--download]
       环境自检:ffmpeg/模型安装状态/LLM 端点/磁盘/缓存,给出修复建议
@@ -147,7 +147,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     else if (a === "--max-clips") {
       const v = Number(rest[++i]);
       if (!Number.isFinite(v)) throw new Error("--max-clips 需要一个数字");
-      args.maxClips = Math.max(1, Math.min(12, Math.round(v)));
+      args.maxClips = Math.max(1, Math.min(MAX_CLIPS, Math.round(v)));
     } else if (a === "--out") {
       const v = rest[++i];
       if (!v) throw new Error("--out 需要一个目录路径");

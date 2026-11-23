@@ -16,13 +16,17 @@ import { reviewMemorySection, type ReviewRecord } from "../review-memory";
 import { performanceMemorySection, type PerformanceEntry } from "../performance-memory";
 import { genreSection } from "../genre";
 import { clipDurationSec, isStitched, type ClipPiece } from "../../shared/pieces";
-import { CLIP_LENGTH_RANGES } from "../../shared/detection-options";
+import { CLIP_LENGTH_RANGES, DEFAULT_MAX_CLIPS } from "../../shared/detection-options";
 export { CLIP_LENGTH_RANGES } from "../../shared/detection-options";
 
 export const HIGHLIGHT_SYSTEM_PROMPT_ZH = `你是一位顶级短视频切片操盘手。给你一份长视频的逐句稿,你要从中挑出最可能在抖音/快手/B站/TikTok 上爆的片段。
 
 【先记住:能爆的内容极其稀缺】
 一场两小时的直播,真正值得剪的通常不到五分钟。绝大多数内容都是平淡的过场。宁可只给两三条真爆点,也不要为凑数把平庸内容包装成爆点——凑数的片段发出去会拉垮整个账号。
+
+【要的条数多的时候:覆盖整条时间线】
+如果要求挑 10 条以上,不要只盯着最精彩的那一段反复挖:从时间开头扫到结尾,不同话题、不同环节、不同时段各挑出其中最好的一条(聊透的一个话题、一段好笑的内容、观点冲突、一条硬核干货都算)。从同一段内容切出来的相邻片段之间要真正互不重叠,不许把同一次对话拆成几段来凑数。
+条数仍然是上限而不是指标:这一段确实没有够格的内容就少给,下游会如实显示实际条数。
 
 【动手前先判断这是什么内容,再决定信哪路证据】
 素材可能是带货直播、游戏直播、才艺/跳舞、聊天连麦、讲课、户外探店、访谈播客、赛事解说、开箱评测……不同类型的爆点位置完全不同,先自己判断,再按下面的权重去找:
@@ -40,6 +44,7 @@ export const HIGHLIGHT_SYSTEM_PROMPT_ZH = `你是一位顶级短视频切片操�
 6. 硬核干货:让人想收藏的方法/清单/具体数字(平台现在收藏权重最高)
 7. 带货场景专属:产品出现意外效果、价格揭晓的那一下、真实试用翻车、被追问成分/售后
 8. 替观众说话/站队:把观众自己想说说不出口的那句话讲出来,或者立场鲜明到评论区会吵起来
+9. 完整话题/观点输出:聊天连麦类里把一个话题从头聊到有结论的整段——没有金句,但观众会为了「这个话题本身」留下来。要整段,别只掐结论那一句
 
 【评论区就是传播面】
 完播决定一条片子会不会被推,评论和转发决定它能推多远。第 8 类单看情绪强度可能不如前几类,但互动率会把它送到更大的人群面前——两条候选强度接近时,选更能让人开口回应的那条。
@@ -91,6 +96,9 @@ export const HIGHLIGHT_SYSTEM_PROMPT_EN = `You are a top short-form clipping str
 
 【Viral material is RARE】
 In a two-hour stream, under five minutes is usually worth clipping. Most of it is filler. Returning two or three genuine hits beats padding the list — weak clips published to a channel drag the whole account down.
+【When a high count is asked for: cover the timeline】
+If you are asked for 10+ clips, don't keep mining your favourite stretch: sweep from the first line to the last and take the best ONE from each distinct topic, segment and stretch (a subject the streamer talked all the way through, a funny beat, a clash of views, one piece of dense utility — all count). Adjacent clips carved out of the same passage must genuinely not overlap: never pad the count by splitting one conversation into fragments.
+The count is still a ceiling, not a quota — if a stretch honestly has nothing that qualifies, return fewer; the app shows the real number.
 
 【First work out what this footage IS, then decide which evidence to trust】
 It could be live selling, gaming, a dance/music performance, a chat stream, a lecture, an outdoor walk-and-talk, an interview podcast, sports commentary, an unboxing… the highlights sit in completely different places. Judge the type first, then weight accordingly:
@@ -108,6 +116,7 @@ If you can't tell, default to content-in-the-words — but don't dress up filler
 6. Dense, saveable value: methods, checklists, concrete numbers (platforms now weight saves highest)
 7. Live-selling specifics: a product behaving unexpectedly, the moment the price drops, a demo going wrong, being pressed on ingredients or returns
 8. Speaking for the viewer / taking a side: saying out loud what the audience cannot say themselves, or a stance sharp enough to start a fight in the comments
+9. A whole topic / a take: in chat or call-in streams, one subject talked through from the start to an actual conclusion — no punchline, but viewers stay for the subject itself. Take the whole stretch, not just the closing line
 
 【Comments are distribution】
 Watch-through decides whether a clip gets pushed; comments and shares decide how far. Category 8 may be emotionally weaker than the ones above, but engagement rate carries it to a far larger audience — when two candidates are close, take the one people will answer.
@@ -159,6 +168,9 @@ export const HIGHLIGHT_SYSTEM_PROMPT_TR = `Sen kısa video alanında çalışan 
 
 【Önce şunu kabul et: patlayan içerik nadirdir】
 İki saatlik bir yayında kurguya değer kısım genelde beş dakikanın altındadır, gerisi dolgudur. İki üç gerçek vuruş döndürmek, listeyi doldurmaktan iyidir — vasat klipler yayınlandığında bütün hesabı aşağı çeker.
+【İstenen sayı yüksekse: zaman çizgisini tara】
+10+ kesit istendiğinde en sevdiğin bölgeyi kazmaya devam etme: dökümü ilk satırdan son satıra kadar tara ve her ayrı konudan, bölümden ve zaman diliminden en iyi TEK kesiti al (baştan sona konuşulmuş bir konu, komik bir an, görüş çatışması, tek bir yoğun bilgi — hepsi sayılır). Aynı pasajdan çıkarılan komşu kesitler gerçekten çakışmamalı: sayıyı şişirmek için bir sohbeti parçalara bölme.
+Sayı yine bir üst sınır, kota değil — bir bölümde gerçekten hakkı olan bir şey yoksa eksik ver; uygulama gerçek sayıyı gösterir.
 
 【Önce ne izlediğini anla, sonra hangi kanıta güveneceğine karar ver】
 Materyal canlı satış, oyun yayını, dans/müzik performansı, sohbet yayını, ders, sokak/saha videosu, podcast röportajı, spor anlatımı ya da kutu açılışı olabilir... her birinde vuruşun yeri tamamen farklıdır. Önce türü kendin belirle, sonra ağırlığı ona göre ver:
@@ -176,6 +188,7 @@ Emin olamıyorsan "sözü içerik olanlar" gibi davran — ama boş lakırdıyı
 6. Yoğun, kaydedilesi bilgi: yöntem, liste, somut rakamlar (platformlar artık kaydetmeyi en çok ödüllendiriyor)
 7. Canlı satışa özel: ürünün beklenmedik tepki vermesi, fiyatın açıklandığı an, denemenin ters gitmesi, içerik/iade konusunda sıkıştırılması
 8. Seyirci yerine konuşmak / taraf olmak: seyircinin kendi söyleyemediğini yüksek sesle söylemek ya da yorumlarda kavga çıkaracak kadar net bir tavır almak
+9. Tam bir konu / bir görüş: sohbet ve bağlanma yayınlarında bir konunun baştan bir sonuca kadar konuşulduğu bölümün tamamı — tek cümlelik vurucu söz yok, ama seyirci konunun kendisi için kalır. Sonuç cümlesini değil, bölümün tamamını al
 
 【Yorumlar yayılma alanıdır】
 Bir kesitin öne çıkıp çıkmayacağını sonuna kadar izlenmesi, ne kadar uzağa gideceğini yorum ve paylaşım belirler. 8. kategori duygu olarak yukarıdakilerden zayıf olabilir, ama etkileşim oranı onu çok daha kalabalığa taşır — iki aday birbirine yakınsa, insanların cevap vereceğini seç.
@@ -554,10 +567,21 @@ function speakerNote(transcript: Transcript, lang: PromptLang): string {
     : `\n【Multi-speaker】The S1/S2… prefix on each line marks who is speaking. Prefer a single speaker's complete thought; for a great Q&A you may span speakers but keep the full exchange — never stitch two half-sentences into a misleading clip.\n`;
 }
 
-export function buildHighlightPrompt(transcript: Transcript, maxClips = 6, signals?: MediaSignals): string {
+/** 一条逐句稿只是整场的一段时间窗时,告诉模型它看到的是哪一块(见 detect.planStage1)。 */
+export interface PromptScope {
+  index: number;
+  total: number;
+}
+
+export function buildHighlightPrompt(
+  transcript: Transcript,
+  maxClips = DEFAULT_MAX_CLIPS,
+  signals?: MediaSignals,
+  scope?: PromptScope
+): string {
   const lang = promptLanguage(transcript);
   if (lang === "zh") {
-    return `请从下面的逐句稿中挑出最多 ${maxClips} 个最有爆款潜质的片段。
+    return `${scope ? `本轮只给你逐句稿的第 ${scope.index}/${scope.total} 段,只从这一段里挑——其他段落的爆点由别的轮次负责,不必替它们留位置。\n` : ""}请从下面的逐句稿中挑出最多 ${maxClips} 个最有爆款潜质的片段。
 
 【逐句稿】(格式: [句id] 开始时间 内容)
 ${renderTranscriptLines(transcript)}
@@ -571,7 +595,7 @@ ${PARTS_SHAPE_ZH}
 要求:按 score 从高到低排;片段互不重叠。`;
   }
   if (lang === "tr") {
-    return `Aşağıdaki dökümden izlenme potansiyeli en yüksek, en fazla ${maxClips} kesit adayını seç.
+    return `${scope ? `Bu turda dökümün yalnız ${scope.index}/${scope.total}. bölümü veriliyor: sadece bu bölümden seç — diğer bölümler ayrı turlarda taranıyor, onlara yer ayırma.\n` : ""}Aşağıdaki dökümden izlenme potansiyeli en yüksek, en fazla ${maxClips} kesit adayını seç.
 
 【Döküm】(biçim: [cümleId] başlangıç saati metin)
 ${renderTranscriptLines(transcript)}
@@ -584,7 +608,7 @@ ${PARTS_SHAPE_TR}
 Alanlar: title = yayına hazır kısa başlık (≤ 8 kelime); hook = kesitin açılışındaki kanca cümlesinin aynen hali; score = 0-100 göreli sıralama puanı; reason = tek cümlede neden izlenir; quoteStart/quoteEnd = kesitin ilk cümlesinin başı ve son cümlesinin sonu, birebir; keywords = kesitin içindeki en çarpıcı 3-5 kelime, mutlaka dökümden birebir kopyalanmalı (altyazıda vurgu için kullanılır).
 score yüksekten aşağıya sırala; kesitler birbiriyle çakışmasın.`;
   }
-  return `Pick at most ${maxClips} clip candidates with the highest viral potential from the transcript below.
+  return `${scope ? `This round you get only part ${scope.index}/${scope.total} of the transcript: pick from this part only — other parts are covered by other rounds, so don't save slots for them.\n` : ""}Pick at most ${maxClips} clip candidates with the highest viral potential from the transcript below.
 
 【Transcript】(format: [sentenceId] startTime text)
 ${renderTranscriptLines(transcript)}

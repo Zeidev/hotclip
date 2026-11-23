@@ -689,7 +689,7 @@ export const en = {
     paramMaxClips: "Maximum clips",
     lengthExtended: "1–2 min (60–120s)",
     secondsUnit: "sec",
-    selectionLimitsHint: "A maximum, not a quota: fewer candidates may qualify. Length applies to source selections; removing pauses can shorten exports.",
+    selectionLimitsHint: "A maximum, not a quota: fewer candidates may qualify. Length applies to source selections; removing pauses can shorten exports. Above 12 the whole timeline is swept in several passes — slower and more expensive.",
     watchSelectionHint: "Starting saves these settings for new recordings. Restart the watcher to apply changes; retries keep the task’s original settings.",
     lengthShortSeg: "Short",
     lengthStandardSeg: "Std",

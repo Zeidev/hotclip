@@ -1,8 +1,11 @@
 import type { ClipLength } from "../../../shared/api-types";
-import { CLIP_LENGTH_RANGES } from "../../../shared/detection-options";
+import { CLIP_LENGTH_RANGES, MAX_CLIPS } from "../../../shared/detection-options";
 import { useT } from "../i18n/store";
 
 /** The same visible length/count controls in the workbench and recording watcher. */
+/** 1-12 每档都留,再往上给常用档:上限之外还分窗口选段(更慢更贵),不值得每档都列。 */
+const CLIP_COUNT_CHOICES = [...Array.from({ length: 12 }, (_, i) => i + 1), 15, 20, 25, 30, 35, MAX_CLIPS];
+
 export function DetectionLimits({ clipLength, maxClips, onChange, disabled = false }: {
   clipLength: ClipLength;
   maxClips: number;
@@ -27,7 +30,7 @@ export function DetectionLimits({ clipLength, maxClips, onChange, disabled = fal
         <select aria-label={t("paramMaxClips")} disabled={disabled} value={maxClips}
           onChange={(e) => onChange({ maxClips: Number(e.target.value) })}
           className="rounded-lg border border-line bg-panel-2 px-2 py-1.5 disabled:opacity-50">
-          {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
+          {CLIP_COUNT_CHOICES.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
       </label>
       <p className="text-[10.5px] leading-relaxed text-mut/80">{t("selectionLimitsHint")}</p>

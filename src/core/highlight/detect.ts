@@ -2,7 +2,7 @@
  * Highlight detection orchestrator: transcript → LLM selections → reverse
  * matching → validated HighlightCandidate list.
  */
-import type { Transcript } from "../transcribe/types";
+import type { Transcript, TranscriptSegment } from "../transcribe/types";
 import type { MediaSignals } from "../signals";
 import type { ReferenceProfile } from "../reference";
 import type { ReviewRecord } from "../review-memory";
@@ -621,6 +621,68 @@ export function mergeProductKeywords(keywords: string[], clipText: string, produ
   return [...keywords, ...hits.filter((h) => !seen.has(h.toLowerCase()))];
 }
 
+/** 信号通道拿到的时间刻石上限:提示词里最多给 8 个选项(见 moments.MOMENT_PROMPT_MAX)。 */
+export const MOMENT_CHANNEL_MAX = 12;
+
+/**
+ * 一次 stage-1 调用里最多要多少条候选。超过就分窗口(v0.35):此前无论要多少条都
+ * 只有一次调用,长视频里模型只会挑「全场最好的 N 条」,其余部分等于没被读过——
+ * 而条数调大的目的恰恰是覆盖面(不同话题/环节/时段的爆点各来一条)。
+ */
+export const STAGE1_PASS_MAX = 12;
+/** 窗口数硬上限:候选再多也不把逐句稿切成碎片(切太碎就看不到上下文)。 */
+export const MAX_STAGE1_PASSES = 4;
+/** 一个窗口至少要这么多句,否则少切几刀——短片不该被硬切成 4 份。 */
+export const MIN_WINDOW_SEGMENTS = 8;
+/** 在途 LLM 请求上限(与 prefilter 的 PREFILTER_CONCURRENCY 同一思路)。 */
+export const LLM_PARALLEL = 2;
+/** stage-2 每批复评多少条:单批输出必须留在 MAX_TOKENS 之内,40 条不能挤进一次调用。 */
+export const REVIEW_BATCH = 12;
+
+export interface Stage1Plan {
+  windows: TranscriptSegment[][];
+  /** 每个窗口向模型要多少条(单窗口时就是用户要的条数,行为与旧版一致)。 */
+  cap: number;
+}
+
+/**
+ * 把逐句稿按时间切成 stage-1 的窗口(纯函数,可单测)。
+ * 条数 ≤ STAGE1_PASS_MAX 时只返回一个窗口 = 旧行为。
+ */
+export function planStage1(segments: TranscriptSegment[], limit: number): Stage1Plan {
+  if (limit <= STAGE1_PASS_MAX) return { windows: [segments], cap: limit };
+  const bySegments = Math.floor(segments.length / MIN_WINDOW_SEGMENTS);
+  const passes = Math.max(1, Math.min(MAX_STAGE1_PASSES, Math.ceil(limit / STAGE1_PASS_MAX), bySegments));
+  if (passes <= 1) return { windows: [segments], cap: limit };
+  const size = Math.ceil(segments.length / passes);
+  const windows: TranscriptSegment[][] = [];
+  for (let i = 0; i < segments.length; i += size) windows.push(segments.slice(i, i + size));
+  // 每窗留一点余量:窗口不重叠,给少了某一窗会因为「宁缺毋滥」直接交白卷
+  return { windows, cap: Math.ceil(limit / windows.length) + 2 };
+}
+
+/** 有界并发跑一组任务:单个失败不影响其余,结果按输入顺序回填。 */
+async function runPool<T>(
+  tasks: Array<() => Promise<T>>,
+  concurrency: number
+): Promise<Array<{ value?: T; error?: unknown }>> {
+  const out: Array<{ value?: T; error?: unknown }> = tasks.map(() => ({}));
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(concurrency, tasks.length)) }, async () => {
+      while (next < tasks.length) {
+        const i = next++;
+        try {
+          out[i] = { value: await tasks[i]() };
+        } catch (e) {
+          out[i] = { error: e };
+        }
+      }
+    })
+  );
+  return out;
+}
+
 export async function detectHighlights(
   transcript: Transcript,
   llm: LlmConfig,
@@ -669,13 +731,39 @@ export async function detectHighlights(
     }
   }
 
-  const selections = await chatCompleteJson(
-    llm,
-    highlightSystemPrompt(promptTranscript, length, products ?? [], reference, reviewMemory, genre, brief, performanceMemory),
-    buildHighlightPrompt(promptTranscript, limit, signals),
-    parseSelections,
-    signal
+  // 条数多时按窗口分别精读(见 planStage1):单次调用只挑得出「全场最好的 N 条」,
+  // 长视频的其余部分等于没读过。窗口切的是漏斗之后的稿(不然漏斗白做),而候选
+  // 反查永远走全量转写,所以窗口边界不会影响落地。
+  // 已知取舍:窗口之间不重叠,横跨窗口边界的「立誓→打脸」远距拼接可能漏掉;
+  // 默认路径(≤ STAGE1_PASS_MAX 条)仍是单次全文,那种远距拼接照旧能选。
+  const system = highlightSystemPrompt(promptTranscript, length, products ?? [], reference, reviewMemory, genre, brief, performanceMemory);
+  const plan = planStage1(promptTranscript.segments, limit);
+  const multi = plan.windows.length > 1;
+  const passes = await runPool(
+    plan.windows.map((windowSegments, i) => () =>
+      chatCompleteJson(
+        llm,
+        system,
+        multi
+          ? buildHighlightPrompt(
+              // 语言写死成已判定的 lang:子集里 auto 会被重新猜一遍,多说话人标记也可能丢
+              { ...promptTranscript, language: lang, segments: windowSegments },
+              plan.cap,
+              signals,
+              { index: i + 1, total: plan.windows.length }
+            )
+          : buildHighlightPrompt(promptTranscript, limit, signals),
+        parseSelections,
+        signal
+      )
+    ),
+    LLM_PARALLEL
   );
+  signal?.throwIfAborted();
+  const passed = passes.filter((p) => p.value !== undefined).map((p) => p.value!);
+  // 一个窗口挂了只少一份覆盖面;全挂才等于旧版的失败
+  if (passed.length === 0) throw passes[0].error ?? new Error("highlight selection failed");
+  const selections = passed.flat();
 
   const { lo, hi } = clipLengthBounds(length);
   const candidates: HighlightCandidate[] = [];
@@ -721,7 +809,7 @@ export async function detectHighlights(
   const ratio = speechRatio(transcript);
   let momentKept: HighlightCandidate[] = [];
   if (signals && shouldRunMoments(evidence, ratio, textKept.length)) {
-    momentKept = await detectMoments(transcript, llm, signals, evidence, length, signal, maxClips).catch((e) => {
+    momentKept = await detectMoments(transcript, llm, signals, evidence, length, signal, Math.min(limit, MOMENT_CHANNEL_MAX)).catch((e) => {
       if (signal?.aborted) throw e;
       return [];
     });
@@ -755,13 +843,22 @@ export async function detectHighlights(
   const reviewable = kept.filter((c) => c.boundary !== "signal");
   if (reviewable.length === 0) return { candidates: finish(kept), funnel };
   try {
-    const reviews = await chatCompleteJson(
-      llm,
-      reviewSystemPrompt(transcript),
-      buildReviewPrompt(transcript, reviewable),
-      parseReviews,
-      signal
+    // 分批复评:REVIEW_SHAPE 每条约 200-250 token,40 条挤一次会撞上 MAX_TOKENS
+    // 截断 JSON(整轮复评 fail-open 掉)。分批后单批仍留在预算内,并且能并行。
+    const batches = Array.from(
+      { length: Math.ceil(reviewable.length / REVIEW_BATCH) },
+      (_, i) => reviewable.slice(i * REVIEW_BATCH, (i + 1) * REVIEW_BATCH)
     );
+    const settled = await runPool(
+      batches.map((batch) => () =>
+        chatCompleteJson(llm, reviewSystemPrompt(transcript), buildReviewPrompt(transcript, batch), parseReviews, signal)
+      ),
+      LLM_PARALLEL
+    );
+    signal?.throwIfAborted();
+    // applyReviews 按 id 认领,所以跨批合并安全;缺评的 id 保持原样(fail-open)
+    const reviews = settled.flatMap((s) => s.value ?? []);
+    if (reviews.length === 0) return { candidates: finish(kept), funnel };
     return { candidates: finish(applyReviews(kept, reviews, promptLanguage(transcript))), funnel };
   } catch {
     return { candidates: finish(kept), funnel };
@@ -833,7 +930,7 @@ export async function detectMoments(
         evidence: m.evidence,
         text: textInRange(transcript, m.startSec, m.endSec),
       })),
-      maxClips === undefined ? 4 : normalizeMaxClips(maxClips),
+      maxClips === undefined ? 4 : Math.min(normalizeMaxClips(maxClips), MOMENT_CHANNEL_MAX),
       lang
     ),
     parseMomentPicks,
