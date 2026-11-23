@@ -320,6 +320,7 @@ One-click hands-off mode + 24/7 watch folder + headless CLI + local MCP server â
 
 ## What's new
 
+**[v0.36.0](https://github.com/Zeidev/hotclip/releases/tag/v0.36.0)** (2026-11-24): selection criteria gain the comments-and-shares dimension (an eighth category for speaking for the viewer, absolute score anchors with an anti-clumping warning, payoff inside the clip, a pre-submit self-check); the clip ceiling moves from 12 to **40** with a default of 12, and above 12 candidates the transcript is read in parallel windows with batched review, so a long recording is no longer reduced to the best few of one pass; the Turkish prompt-injected sections (products, brief, signals, reference profile, review memory, performance memory, rule-gate reasons) are complete instead of falling back to English. [Release notes](docs/releases/v0.36.0.md).
 **[v0.33.0](https://github.com/xixihhhh/hotclip/releases/tag/v0.33.0)** (2026-10-26): always-visible duration/count controls, a 60â€“120 second preset, and up to 12 candidates; shared genre/custom criteria across CLI, MCP and recording automation, including export pacing and persistent retry settings.
 
 **[v0.32.0](https://github.com/xixihhhh/hotclip/releases/tag/v0.32.0)**: fixes permanent black screens and failed seeking in the Windows review desk when multiple videos share a media stream; preview errors now show the actual code; fetched model lists now have an explicit clickable dropdown while manual entry remains available.
