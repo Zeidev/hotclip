@@ -159,6 +159,25 @@ describe("multi-window detection", () => {
   });
 });
 
+describe("prompt language override", () => {
+  it("sends the pinned language instead of the transcript's own, end to end", async () => {
+    const candidates = await detectForPipeline("/source.mp4", transcript, { ...config, maxClips: 12, promptLang: "tr" });
+    const system = requests[0].messages[0].content;
+    const user = requests[0].messages[1].content;
+    // 逐句稿是中文,但用户钉了 tr:系统与用户 prompt 都是原生土耳其语,无汉字
+    expect(system).toContain("kurgu stratejistsin");
+    expect(user).toContain("Aşağıdaki dökümden");
+    expect(/[一-鿿]/.test(system)).toBe(false);
+    // 逐句稿本身仍是原文(中文),只是命令与字段说明换语言
+    expect(candidates.length).toBeGreaterThan(0);
+  });
+
+  it("keeps the guess when the override is auto", async () => {
+    await detectForPipeline("/source.mp4", transcript, { ...config, maxClips: 12, promptLang: "auto" });
+    expect(requests[0].messages[1].content).toContain("请从下面的逐句稿中挑出");
+  });
+});
+
 describe("stage-1 scope line", () => {
   const three = (language: string, texts: string[]): Transcript => ({
     engine: "test", language, durationSec: 12,

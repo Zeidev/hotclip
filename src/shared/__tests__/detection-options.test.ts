@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MAX_CLIPS, MAX_CLIPS, normalizeMaxClips } from "../detection-options";
+import { DEFAULT_MAX_CLIPS, MAX_CLIPS, normalizeMaxClips, normalizePromptLang } from "../detection-options";
 
 describe("normalizeMaxClips", () => {
   it("keeps an in-range count and rounds fractions", () => {
@@ -28,5 +28,21 @@ describe("normalizeMaxClips", () => {
   it("uses 12 as the documented default and 40 as the ceiling", () => {
     expect(DEFAULT_MAX_CLIPS).toBe(12);
     expect(MAX_CLIPS).toBe(40);
+  });
+});
+describe("normalizePromptLang", () => {
+  it("keeps the four documented choices", () => {
+    expect(normalizePromptLang("auto")).toBe("auto");
+    expect(normalizePromptLang("zh")).toBe("zh");
+    expect(normalizePromptLang("tr")).toBe("tr");
+    expect(normalizePromptLang("en")).toBe("en");
+  });
+  it("falls back to auto for anything else", () => {
+    expect(normalizePromptLang(undefined)).toBe("auto");
+    expect(normalizePromptLang(null)).toBe("auto");
+    expect(normalizePromptLang("")).toBe("auto");
+    expect(normalizePromptLang("de")).toBe("auto");
+    expect(normalizePromptLang("TR")).toBe("auto");
+    expect(normalizePromptLang(5)).toBe("auto");
   });
 });

@@ -10,7 +10,7 @@
 
 import { describeSubtitleImportError } from "../shared/subtitle-import";
 import { GENRE_PRESETS } from "../core/genre";
-import { CLIP_LENGTH_RANGES } from "../shared/detection-options";
+import { CLIP_LENGTH_RANGES, PROMPT_LANG_CHOICES } from "../shared/detection-options";
 import { LOCAL_ASR_ENGINE_IDS } from "../shared/asr-engines";
 
 /** MCP 协议版本(2024-11-05 基线,客户端普遍兼容)。 */
@@ -36,6 +36,7 @@ const selectionProperties = {
   genre: { type: "string", enum: GENRE_PRESETS.map((g) => g.id), description: "直播品类,默认 auto;同时用于检测证据与导出跳剪节奏" },
   genreCustom: { type: "string", description: "自定义爆点判据;非空时覆盖内置判据,最多 1200 字" },
   clipLength: { type: "string", enum: Object.keys(CLIP_LENGTH_RANGES), description: "目标时长:short 10-30s / standard 8-40s / long 40-90s / extended 60-120s;默认 standard" },
+  promptLang: { type: "string", enum: [...PROMPT_LANG_CHOICES], description: "AI 提示词语言:auto(默认)按转写语言或文本特征判定,zh/tr/en 强制该语言(标题/钩子/理由也跟随);导入字幕没有引擎语言,判定猜错时用它钉死" },
 };
 
 export const MCP_TOOLS: McpToolDef[] = [

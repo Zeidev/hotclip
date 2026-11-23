@@ -35,7 +35,8 @@ export function useDetection(): { run: () => Promise<void> } {
         { id: prefs.genreId, custom: prefs.genreCustom },
         focus || exclude ? { focus: focus || undefined, exclude: exclude || undefined } : null,
         prefs.fullScan && vision.enabled,
-        prefs.maxClips
+        prefs.maxClips,
+        prefs.promptLang
       );
       const st = useSession.getState();
       st.setCandidates(result.candidates);

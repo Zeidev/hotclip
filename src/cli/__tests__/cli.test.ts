@@ -79,6 +79,13 @@ describe("parseCliArgs (CLI 参数解析)", () => {
     expect(parseCliArgs(["clip", "/v/a.mp4", "--max-clips", "99"]).maxClips).toBe(40);
     expect(parseCliArgs(["clip", "/v/a.mp4", "--max-clips", "0"]).maxClips).toBe(1);
   });
+  it("--prompt-lang 只认 auto/zh/tr/en;缺省不覆盖", () => {
+    expect(parseCliArgs(["highlights", "/v/a.mp4", "--prompt-lang", "tr"]).promptLang).toBe("tr");
+    expect(parseCliArgs(["highlights", "/v/a.mp4", "--prompt-lang", "auto"]).promptLang).toBe("auto");
+    expect(parseCliArgs(["clip", "/v/a.mp4"]).promptLang).toBeUndefined();
+    expect(() => parseCliArgs(["clip", "/v/a.mp4", "--prompt-lang", "de"])).toThrow(/prompt-lang/);
+    expect(() => parseCliArgs(["clip", "/v/a.mp4", "--prompt-lang"])).toThrow(/prompt-lang/);
+  });
 
   it("选项顺序无关:选项可在路径之前", () => {
     const a = parseCliArgs(["highlights", "--max-clips", "5", "/v/a.mp4"]);
