@@ -82,7 +82,7 @@ import { collectSignalsEvidence, collectVisionEvidence } from "@core/media-evide
 import { applyGlossaryToTranscript } from "../shared/glossary";
 import { tagTranscribeError } from "../shared/transcribe-errors";
 import { autoClip, analyzeReferenceVideo, validateDetectionOptions } from "@core/pipeline";
-import { isClipLength, normalizeMaxClips } from "../shared/detection-options";
+import { isClipLength, normalizeMaxClips, normalizePromptLang } from "../shared/detection-options";
 import type { DetectionOptions } from "../shared/api-types";
 import type { ReferenceProfile } from "@core/reference";
 import { exportClips, sanitizeFilename } from "@core/export";
@@ -845,7 +845,7 @@ ipcMain.handle("hotclip:transcribe", async (event, filePath: unknown, engineId: 
 
 ipcMain.handle(
   "hotclip:detect-highlights",
-  async (_event, transcript: unknown, llm: unknown, filePath: unknown, diarize: unknown, prefilter: unknown, vision: unknown, length: unknown, products: unknown, referencePath: unknown, genre: unknown, brief: unknown, scan: unknown, maxClips: unknown) => {
+  async (_event, transcript: unknown, llm: unknown, filePath: unknown, diarize: unknown, prefilter: unknown, vision: unknown, length: unknown, products: unknown, referencePath: unknown, genre: unknown, brief: unknown, scan: unknown, maxClips: unknown, promptLang: unknown) => {
     let t = transcript as Transcript;
     const config = llm as LlmConfig;
     if (!t || !Array.isArray(t.segments)) throw new Error("detect-highlights requires a transcript");
@@ -1015,7 +1015,7 @@ ipcMain.handle(
             exclude: typeof b.exclude === "string" ? b.exclude.trim() : undefined,
           }
         : undefined;
-    const outcome = await detectHighlights(t, config, undefined, signals, localFilter, clipLength, productWords, reference, reviewMemory, genreArg, briefArg, performanceMemory, normalizeMaxClips(maxClips));
+    const outcome = await detectHighlights(t, config, undefined, signals, localFilter, clipLength, productWords, reference, reviewMemory, genreArg, briefArg, performanceMemory, normalizeMaxClips(maxClips), normalizePromptLang(promptLang));
     // 候选段画面复核(v0.12):每条候选一张接触表让 VL 看画面,画面分回流
     // 排序、看点进 reason。fail-open:失败/超时沿用原候选。
     let candidates = outcome.candidates;

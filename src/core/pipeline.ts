@@ -6,7 +6,7 @@ import { WhisperCppEngine } from "./transcribe/whisper-cpp";
 import type { SpeechRunOptions, DetectionOptions } from "../shared/api-types";
 import type { TranscribeEngine } from "./transcribe/types";
 import { parseGenre } from "./genre";
-import { isClipLength, normalizeMaxClips } from "../shared/detection-options";
+import { isClipLength, normalizeMaxClips, normalizePromptLang } from "../shared/detection-options";
 import { isLocalAsrEngineId } from "../shared/asr-engines";
 /**
  * 自动切片公共管线(无 UI 依赖):转写(带缓存)→ 信号采集 → LLM 找爆点 →
@@ -156,7 +156,7 @@ export async function analyzeReferenceVideo(
 export async function detectForPipeline(
   videoPath: string,
   transcript: Transcript,
-  cfg: Pick<AutoClipConfig, "modelsRoot" | "evidenceCacheDir" | "llm" | "maxClips" | "clipLength" | "genre" | "reference" | "reviewMemory" | "performanceMemory" | "signal">
+  cfg: Pick<AutoClipConfig, "modelsRoot" | "evidenceCacheDir" | "llm" | "maxClips" | "clipLength" | "genre" | "promptLang" | "reference" | "reviewMemory" | "performanceMemory" | "signal">
 ): Promise<HighlightCandidate[]> {
   const selection = validateDetectionOptions(cfg);
   if (transcript.segments.length === 0) throw new Error("转写结果为空(可能是无人声素材) / empty transcript (the source may have no speech)");
@@ -209,7 +209,7 @@ export async function detectForPipeline(
   const outcome = await detectHighlights(
     transcript, cfg.llm, cfg.signal, merged,
     undefined, selection.clipLength, undefined, cfg.reference, cfg.reviewMemory,
-    selection.genre, undefined, cfg.performanceMemory, cfg.maxClips
+    selection.genre, undefined, cfg.performanceMemory, cfg.maxClips, selection.promptLang
   );
   return outcome.candidates.slice(0, selection.maxClips);
 }
@@ -228,6 +228,7 @@ export function validateDetectionOptions(value: unknown = {}): DetectionOptions 
     clipLength: options.clipLength,
     maxClips: normalizeMaxClips(options.maxClips),
     genre: parseGenre(options.genre?.id, options.genre?.custom),
+    promptLang: normalizePromptLang(options.promptLang),
   };
 }
 

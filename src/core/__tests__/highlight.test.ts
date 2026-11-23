@@ -10,6 +10,7 @@ import {
   isChineseTranscript,
   isMultiSpeaker,
   highlightSystemPrompt,
+  looksTurkish,
   momentSystemPrompt,
   promptLanguage,
   renderSignals,
@@ -420,6 +421,44 @@ describe("Türkçe prompt yolu", () => {
     expect(promptLanguage({ ...trTx, language: "auto", segments: [{ id: 1, startSec: 0, endSec: 4, text: "The discount never comes, honestly.", words: [] }] })).toBe("en");
   });
 
+  it("girişi Türkçe harf taşımayan döküm de Türkçe sayılır", () => {
+    // Uzun bir döküm, ilk 20 cümlede tek bir ı/İ/ğ/Ğ/ş/Ş yok (selamlama +
+    // fiyat listesi); Türkçe harfler çok sonra geliyor.
+    const opening = Array.from({ length: 20 }, (_, i) => ({
+      id: i + 1, startSec: i * 4, endSec: i * 4 + 4,
+      text: "Merhaba arkadaslar bugun cok guzel bir konu var, hemen basliyoruz.", words: [],
+    }));
+    const tail = Array.from({ length: 12 }, (_, i) => ({
+      id: 21 + i, startSec: 80 + i * 4, endSec: 80 + i * 4 + 4,
+      text: "Sipariş verirken şunu unutmayın, ışığı da kapatmayın.", words: [],
+    }));
+    const tx: Transcript = {
+      engine: "subtitle-srt", language: "auto", durationSec: 130,
+      segments: [...opening, ...tail],
+    };
+    expect(looksTurkish(opening.map((s) => s.text).join(" "))).toBe(false);
+    expect(promptLanguage(tx)).toBe("tr");
+  });
+
+  it("yabancı dökümdeki birkaç Türkçe harf dili çevirmez", () => {
+    const base =
+      "Today we talk about turning long videos into viral shorts, and we cover pacing, captions, thumbnails, " +
+      "retention curves, publishing cadence and what actually moves a clip out of a cold audience.";
+    const rep = (n: number) => Array.from({ length: n }, () => base).join(" ");
+    // İsabet sayısı eşiğin altında: uzun İngilizce metin İngilizce kalır
+    const few = `${rep(3)} I interviewed Işık from a small studio in Berlin.`;
+    expect(looksTurkish(few)).toBe(false);
+    // İsabet sayısı yeter ama yoğunluk %1'in altında: yine İngilizce kalır
+    const sparse = `${rep(5)} Işık, Işık, Işık.`;
+    expect(looksTurkish(sparse)).toBe(false);
+    expect(
+      promptLanguage({
+        engine: "subtitle-srt", language: "auto", durationSec: 60,
+        segments: [{ id: 1, startSec: 0, endSec: 60, text: sparse, words: [] }],
+      }),
+    ).toBe("en");
+  });
+
   it("Türkçe hook formülleri İngilizce metinle karışmaz", () => {
     const sys = highlightSystemPrompt(trTx);
     expect(sys).toContain("kurgu stratejistsin");
@@ -434,6 +473,26 @@ describe("Türkçe prompt yolu", () => {
     expect(user).toContain("【Döküm】");
     expect(user).toContain("Alanlar: title");
     expect(/[一-鿿]/.test(user)).toBe(false);
+  });
+
+  it("açık prompt dili tahmini geçersiz kılar", () => {
+    const en: Transcript = {
+      engine: "subtitle-srt", language: "en", durationSec: 4,
+      segments: [{ id: 1, startSec: 0, endSec: 4, text: "The discount never comes, honestly.", words: [] }],
+    };
+    // Tahmin "en" derdi ama kullanıcı tr dedi: system, user ve inceleme promptu tr olur
+    expect(promptLanguage(en, "tr")).toBe("tr");
+    expect(highlightSystemPrompt(en, "standard", [], undefined, undefined, undefined, undefined, undefined, "tr"))
+      .toContain("kurgu stratejistsin");
+    expect(buildHighlightPrompt(en, 6, undefined, undefined, "tr")).toContain("【Döküm】");
+    expect(reviewSystemPrompt(en, "tr")).toContain("acımasız bir kısa video içerik denetçisi");
+    expect(buildReviewPrompt(en, [], "tr")).toContain("【Çıktı biçimi】");
+    // auto hiçbir şeyi değiştirmez: tahmin aynen çalışır
+    expect(promptLanguage(en, "auto")).toBe("en");
+    expect(promptLanguage({ ...trTx, language: "auto" }, "auto")).toBe("tr");
+    // ters yön de mümkün: Türkçe sanılan döküm için en/zh zorlanabilir
+    expect(promptLanguage(trTx, "en")).toBe("en");
+    expect(promptLanguage(en, "zh")).toBe("zh");
   });
 
   it("süre kademesi Türkçe satırı da yeniden yazar", () => {

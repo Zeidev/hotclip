@@ -9,7 +9,7 @@
  * follow the transcript's own language. Pure builders, testable.
  */
 import type { Transcript } from "../transcribe/types";
-import type { ClipLength } from "../../shared/api-types";
+import type { ClipLength, PromptLangChoice } from "../../shared/api-types";
 import type { MediaSignals } from "../signals";
 import { referencePromptSection, type ReferenceProfile } from "../reference";
 import { reviewMemorySection, type ReviewRecord } from "../review-memory";
@@ -254,31 +254,63 @@ export type PromptLang = "zh" | "tr" | "en";
 
 /**
  * Letters that only Turkish uses among the Latin-script languages we cover
- * (dotless ı, dotted capital İ, soft g, s with cedilla). Two of them in a
- * sample is already conclusive — they do not appear in English, Spanish,
- * German or French text.
+ * (dotless ı, dotted capital İ, soft g, s with cedilla). A couple of them are
+ * already conclusive — they do not appear in English, Spanish, German or
+ * French text.
  */
-const TURKISH_LETTERS_RE = /[ıİğĞşŞ]/;
+const TURKISH_LETTERS_RE = /[ıİğĞşŞ]/g;
+
+/** Latin letters, Turkish-specific ones included — the denominator for density. */
+const LATIN_LETTERS_RE = /[A-Za-zÇĞİÖŞÜçğıöşü]/g;
+
+/** Below this many letters a sample is too short to carry any density signal. */
+const SHORT_LETTER_COUNT = 300;
+/** A long text must show both enough hits and enough density (see looksTurkish). */
+const LONG_MIN_HITS = 5;
+const LONG_MIN_RATIO = 0.01;
 
 /** Turkish when the engine says so, or when the text itself is Turkic. */
 export function isTurkishTranscript(transcript: Transcript): boolean {
   const lang = transcript.language.toLowerCase();
   if (lang.startsWith("tr")) return true;
   if (lang && lang !== "auto") return false;
-  const sample = transcript.segments
-    .slice(0, 20)
-    .map((s) => s.text)
-    .join("");
-  const hits = sample.match(new RegExp(TURKISH_LETTERS_RE, "g")) ?? [];
-  return sample.length > 0 && hits.length >= 2;
+  return looksTurkish(
+    transcript.segments
+      .map((s) => s.text)
+      .join(" "),
+  );
+}
+
+/**
+ * The text half of the language decision, exported so it can be tested on its
+ * own. Reads the whole transcript rather than its opening: an intro, an ad read
+ * or a run of prices can carry no ı/İ/ğ/Ğ/ş/Ş at all, and the old first-20-cue
+ * sample then sent a Turkish run down the English prompt.
+ *
+ * On a long text the letters must also be dense enough: a foreign transcript
+ * that quotes a Turkish name a few times clears a bare hit count but not a
+ * per-letter ratio, so it keeps its own prompt. Short samples have no density to
+ * measure and stay on the plain hit count.
+ */
+export function looksTurkish(text: string): boolean {
+  const hits = text.match(TURKISH_LETTERS_RE)?.length ?? 0;
+  if (hits < 2) return false;
+  const letters = text.match(LATIN_LETTERS_RE)?.length ?? 0;
+  if (letters <= SHORT_LETTER_COUNT) return true;
+  return hits >= LONG_MIN_HITS && hits / letters >= LONG_MIN_RATIO;
 }
 
 /**
  * One language decision for every prompt that gets built for this transcript.
  * Chinese keeps its own prompt; Turkish gets Turkish hook formulas rather than
  * translated English ones; everything else falls back to English.
+ *
+ * `override` is the user's explicit choice ("auto" = no opinion, the default):
+ * an imported SRT carries no engine language, so the guess is all we have —
+ * the override is the escape hatch when it guesses wrong.
  */
-export function promptLanguage(transcript: Transcript): PromptLang {
+export function promptLanguage(transcript: Transcript, override?: PromptLang | PromptLangChoice): PromptLang {
+  if (override && override !== "auto") return override;
   if (isChineseTranscript(transcript)) return "zh";
   if (isTurkishTranscript(transcript)) return "tr";
   return "en";
@@ -292,9 +324,10 @@ export function highlightSystemPrompt(
   reviewMemory?: ReviewRecord[],
   genre?: { id?: string; custom?: string },
   brief?: { focus?: string; exclude?: string },
-  performanceMemory?: PerformanceEntry[]
+  performanceMemory?: PerformanceEntry[],
+  langOverride?: PromptLang | PromptLangChoice
 ): string {
-  const lang = promptLanguage(transcript);
+  const lang = promptLanguage(transcript, langOverride);
   const zh = lang === "zh";
   let base =
     lang === "zh" ? HIGHLIGHT_SYSTEM_PROMPT_ZH : lang === "tr" ? HIGHLIGHT_SYSTEM_PROMPT_TR : HIGHLIGHT_SYSTEM_PROMPT_EN;
@@ -577,9 +610,10 @@ export function buildHighlightPrompt(
   transcript: Transcript,
   maxClips = DEFAULT_MAX_CLIPS,
   signals?: MediaSignals,
-  scope?: PromptScope
+  scope?: PromptScope,
+  langOverride?: PromptLang | PromptLangChoice
 ): string {
-  const lang = promptLanguage(transcript);
+  const lang = promptLanguage(transcript, langOverride);
   if (lang === "zh") {
     return `${scope ? `本轮只给你逐句稿的第 ${scope.index}/${scope.total} 段,只从这一段里挑——其他段落的爆点由别的轮次负责,不必替它们留位置。\n` : ""}请从下面的逐句稿中挑出最多 ${maxClips} 个最有爆款潜质的片段。
 
@@ -837,8 +871,8 @@ Her kesit için "sıfır bağlam" kararını ver — yayını hiç görmemiş gi
 - "drop": yayınlanmaya değmez — tamamlanmamış düşünce, dolgu, cımbızlama ya da tek başına anlaşılmaz
 "drop" demekten çekinme: yapay zekâ seçimlerinin %30-45'i çöp çıkıyor ve bu sektörün gerçeği; çöp yayınlamanın bedelini bütün hesap ödüyor. Yayın öncesi son kalite kapısı sensin. keep alanını doldurmaya devam et (publish için true, kalanı false).`;
 
-export function reviewSystemPrompt(transcript: Transcript): string {
-  const lang = promptLanguage(transcript);
+export function reviewSystemPrompt(transcript: Transcript, langOverride?: PromptLang | PromptLangChoice): string {
+  const lang = promptLanguage(transcript, langOverride);
   if (lang === "zh") return REVIEW_SYSTEM_PROMPT_ZH;
   if (lang === "tr") return REVIEW_SYSTEM_PROMPT_TR;
   return REVIEW_SYSTEM_PROMPT_EN;
@@ -881,8 +915,12 @@ function contextAround(transcript: Transcript, startSec: number, endSec: number)
   };
 }
 
-export function buildReviewPrompt(transcript: Transcript, clips: ReviewableClip[]): string {
-  const lang = promptLanguage(transcript);
+export function buildReviewPrompt(
+  transcript: Transcript,
+  clips: ReviewableClip[],
+  langOverride?: PromptLang | PromptLangChoice
+): string {
+  const lang = promptLanguage(transcript, langOverride);
   const zh = lang === "zh";
   const tr = lang === "tr";
   const blocks = clips

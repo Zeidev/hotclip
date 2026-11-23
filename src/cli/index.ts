@@ -22,9 +22,9 @@ import { ensureModel } from "../core/models";
 import { loadReviewMemory } from "../core/review-memory";
 import { importPerformanceFile, loadPerformanceMemory, performanceReport } from "../core/performance-memory";
 import { parseGenre } from "../core/genre";
-import { isClipLength, MAX_CLIPS } from "../shared/detection-options";
+import { isClipLength, isPromptLangChoice, MAX_CLIPS } from "../shared/detection-options";
 import { isLocalAsrEngineId, LOCAL_ASR_ENGINE_IDS } from "../shared/asr-engines";
-import type { DetectionOptions } from "../shared/api-types";
+import type { DetectionOptions, PromptLangChoice } from "../shared/api-types";
 
 const USAGE = `HotClip CLI —— 本地 AI 切片,素材不出电脑
 
@@ -56,6 +56,7 @@ const USAGE = `HotClip CLI —— 本地 AI 切片,素材不出电脑
       --genre-custom <文本> 自定义判据,非空时覆盖所选品类的内置判据
       --clip-length <档位>   short=10-30s / standard=8-40s / long=40-90s / extended=60-120s
       --max-clips N          最多 1-40 条(默认 12);不足时保留实际候选,不凑数;超过 12 条会分窗口多次选段(更慢、更贵,但覆盖整条时间线)
+      --prompt-lang <语言>   AI 提示词语言:auto(默认,按转写/文本判定)/ zh / tr / en。导入字幕没有引擎语言,判定猜错时用它钉死(标题/钩子/理由也跟随该语言)
 
   pnpm cli doctor [--download]
       环境自检:ffmpeg/模型安装状态/LLM 端点/磁盘/缓存,给出修复建议
@@ -90,6 +91,8 @@ export interface CliArgs extends DetectionOptions {
   engineId?: string;
   /** ASR language hint (Whisper & other multilingual engines; empty = auto). */
   language?: string;
+  /** AI prompt language; auto = decide from the transcript (see --prompt-lang). */
+  promptLang?: PromptLangChoice;
   localServiceUrl?: string;
   restart?: boolean;
   json: boolean;
@@ -143,6 +146,11 @@ export function parseCliArgs(argv: string[]): CliArgs {
       const value = rest[++i];
       if (!value) throw new Error("--asr-url requires a loopback URL");
       args.localServiceUrl = localSpeechUrl(value);
+    }
+    else if (a === "--prompt-lang") {
+      const value = rest[++i];
+      if (!isPromptLangChoice(value)) throw new Error("--prompt-lang: auto | zh | tr | en");
+      args.promptLang = value;
     }
     else if (a === "--max-clips") {
       const v = Number(rest[++i]);
@@ -274,6 +282,7 @@ async function main(signal?: AbortSignal): Promise<void> {
       maxClips: args.maxClips,
       genre: args.genre,
       clipLength: args.clipLength,
+      promptLang: args.promptLang,
       reference,
       // 桌面审阅台积累的本机偏好,CLI 检测同享(只读)
       reviewMemory: await loadReviewMemory(userDataDir()),
@@ -321,6 +330,7 @@ async function main(signal?: AbortSignal): Promise<void> {
       maxClips: args.maxClips,
       genre: args.genre,
       clipLength: args.clipLength,
+      promptLang: args.promptLang,
       vertical: args.vertical,
       captions: args.captions,
       autoEnhance: args.autoEnhance,

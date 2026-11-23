@@ -19,7 +19,7 @@ import { loadReviewMemory } from "../core/review-memory";
 import { loadPerformanceMemory } from "../core/performance-memory";
 import { handleMcpMessage, type JsonRpcMessage } from "./protocol";
 import { parseGenre } from "../core/genre";
-import { isClipLength, MAX_CLIPS } from "../shared/detection-options";
+import { isClipLength, MAX_CLIPS, normalizePromptLang } from "../shared/detection-options";
 
 function fmtClock(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -77,6 +77,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       maxClips: clampClips(args.maxClips),
       genre: parseGenre(typeof args.genre === "string" ? args.genre : undefined, typeof args.genreCustom === "string" ? args.genreCustom : undefined),
       clipLength: isClipLength(args.clipLength) ? args.clipLength : undefined,
+      promptLang: normalizePromptLang(args.promptLang),
       reference: ref.profile,
       // 桌面审阅台积累的本机偏好,MCP 检测同享(只读)
       reviewMemory: await loadReviewMemory(userDataDir()),
@@ -115,6 +116,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       maxClips: clampClips(args.maxClips),
       genre: parseGenre(typeof args.genre === "string" ? args.genre : undefined, typeof args.genreCustom === "string" ? args.genreCustom : undefined),
       clipLength: isClipLength(args.clipLength) ? args.clipLength : undefined,
+      promptLang: normalizePromptLang(args.promptLang),
       vertical: args.vertical !== false,
       captions: args.captions !== false,
       autoEnhance: args.autoEnhance === true,

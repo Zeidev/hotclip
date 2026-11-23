@@ -503,7 +503,7 @@ export function Inspector({
   return (
     <div className="flex w-[300px] shrink-0 flex-col border-l border-line/70 bg-panel/40">
       <div className="shrink-0 border-b border-line/60 p-3.5">
-        <DetectionLimits clipLength={prefs.clipLength} maxClips={prefs.maxClips}
+        <DetectionLimits clipLength={prefs.clipLength} maxClips={prefs.maxClips} promptLang={prefs.promptLang}
           disabled={detecting} onChange={(value) => { setPref(value); markParamsDirty(true); }} />
         {paramsDirty && <button type="button" disabled={detecting} onClick={onRedetect}
           className="btn-flame mt-2 w-full rounded-lg px-2 py-1.5 text-[12px] font-bold text-white disabled:opacity-40">

@@ -4,9 +4,9 @@
  * 这次还怎么出。多人对谈(diarize)故意不记:它对单视频生效,换素材要重判。
  */
 import { create } from "zustand";
-import type { CaptionStyleChoice, ClipLength, ExportQuality } from "../../../shared/api-types";
+import type { CaptionStyleChoice, ClipLength, ExportQuality, PromptLangChoice } from "../../../shared/api-types";
 import { validPlatformIds } from "../../../shared/platform-specs";
-import { DEFAULT_MAX_CLIPS, isClipLength, normalizeMaxClips } from "../../../shared/detection-options";
+import { DEFAULT_MAX_CLIPS, isClipLength, normalizeMaxClips, normalizePromptLang } from "../../../shared/detection-options";
 import { DEFAULT_SENSITIVE_WORDS, sanitizeSensitiveWords } from "../../../core/sensitive-words";
 
 const STORAGE_KEY = "hotclip-render-prefs";
@@ -72,6 +72,8 @@ export interface RenderPrefs {
   variants: number;
   clipLength: ClipLength;
   maxClips: number;
+  /** 提示词语言:auto = 按转写语言/文本判定(导入字幕没有引擎语言,判定可能猜错)。 */
+  promptLang: PromptLangChoice;
   /** 直播品类判据(见 core/genre.ts);custom 时用 genreCustom 的文本。 */
   genreId: string;
   /** 用户改写的判据文本;非空时一律盖过内置预设。 */
@@ -132,6 +134,7 @@ export const RENDER_PREF_DEFAULTS: RenderPrefs = {
   variants: 1, // 多版=多倍导出时间+一次 LLM 调用,默认关
   clipLength: "standard",
   maxClips: DEFAULT_MAX_CLIPS,
+  promptLang: "auto", // 出厂跟随判定:多语言视频不该逼用户先做语言选择
   genreId: "auto", // 出厂不指定品类:通用提示词里已让模型先自判内容类型
   genreCustom: "",
   briefFocus: "", // 点题出厂为空:不点题就按通用判据找
@@ -177,6 +180,7 @@ function load(): RenderPrefs {
       if (![1, 2, 3].includes(out.variants)) out.variants = 1;
       if (!isClipLength(out.clipLength)) out.clipLength = "standard";
       out.maxClips = normalizeMaxClips(out.maxClips);
+      out.promptLang = normalizePromptLang(out.promptLang);
       if (!["high", "standard", "compact"].includes(out.quality)) out.quality = "high";
       if (!["keyword", "pop", "minimal", "hormozi", "bubble", "karaoke", "none"].includes(out.captionStyle)) out.captionStyle = "keyword";
       if (!["off", "volume", "premium"].includes(out.aiCover)) out.aiCover = "off";

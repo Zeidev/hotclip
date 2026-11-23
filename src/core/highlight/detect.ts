@@ -7,7 +7,14 @@ import type { MediaSignals } from "../signals";
 import type { ReferenceProfile } from "../reference";
 import type { ReviewRecord } from "../review-memory";
 import type { PerformanceEntry } from "../performance-memory";
-import type { HighlightCandidate, LlmConfig, PrefilterConfig, FunnelStats, ClipLength } from "../../shared/api-types";
+import type {
+  HighlightCandidate,
+  LlmConfig,
+  PrefilterConfig,
+  FunnelStats,
+  ClipLength,
+  PromptLangChoice,
+} from "../../shared/api-types";
 import {
   highlightSystemPrompt,
   buildHighlightPrompt,
@@ -30,7 +37,7 @@ import { snapSelectionToCues } from "../../shared/boundary";
 import { isLocalBaseUrl } from "../../shared/llm-preflight";
 import { LLM_LOCAL_TIMEOUT_MS, LLM_REMOTE_TIMEOUT_MS, LlmTransportError, llmRequestBudget, modelErrorDetail, requestLlmText, retryAfterMs, type LlmRequestBudget } from "../llm-transport";
 import { genrePreset, normalizeGenreId, type EvidenceClass } from "../genre";
-import { normalizeMaxClips } from "../../shared/detection-options";
+import { normalizeMaxClips, normalizePromptLang } from "../../shared/detection-options";
 import {
   fuseMoments,
   shouldRunMoments,
@@ -699,11 +706,13 @@ export async function detectHighlights(
   brief?: { focus?: string; exclude?: string },
   /** 用户导入的真实发布表现(本地记忆,只注入高/低表现摘要)。 */
   performanceMemory?: PerformanceEntry[],
-  maxClips?: number
+  maxClips?: number,
+  /** 提示词语言覆盖(auto/zh/tr/en);导入字幕没有引擎语言时靠它兜底。 */
+  promptLang?: PromptLangChoice
 ): Promise<DetectOutcome> {
   if (transcript.segments.length === 0) return { candidates: [] };
   // 语言一次判定,贯穿提示词、规则门与加分理由(zh/tr/en,tr 不再借 en 文案)
-  const lang = promptLanguage(transcript);
+  const lang = promptLanguage(transcript, normalizePromptLang(promptLang));
   const limit = normalizeMaxClips(maxClips);
 
   // 主播口令打点(v0.13):「这段剪下来/clip that」是主播自证的爆点,纯文本
@@ -736,7 +745,7 @@ export async function detectHighlights(
   // 反查永远走全量转写,所以窗口边界不会影响落地。
   // 已知取舍:窗口之间不重叠,横跨窗口边界的「立誓→打脸」远距拼接可能漏掉;
   // 默认路径(≤ STAGE1_PASS_MAX 条)仍是单次全文,那种远距拼接照旧能选。
-  const system = highlightSystemPrompt(promptTranscript, length, products ?? [], reference, reviewMemory, genre, brief, performanceMemory);
+  const system = highlightSystemPrompt(promptTranscript, length, products ?? [], reference, reviewMemory, genre, brief, performanceMemory, lang);
   const plan = planStage1(promptTranscript.segments, limit);
   const multi = plan.windows.length > 1;
   const passes = await runPool(
@@ -750,9 +759,10 @@ export async function detectHighlights(
               { ...promptTranscript, language: lang, segments: windowSegments },
               plan.cap,
               signals,
-              { index: i + 1, total: plan.windows.length }
+              { index: i + 1, total: plan.windows.length },
+              lang
             )
-          : buildHighlightPrompt(promptTranscript, limit, signals),
+          : buildHighlightPrompt(promptTranscript, limit, signals, undefined, lang),
         parseSelections,
         signal
       )
@@ -809,7 +819,7 @@ export async function detectHighlights(
   const ratio = speechRatio(transcript);
   let momentKept: HighlightCandidate[] = [];
   if (signals && shouldRunMoments(evidence, ratio, textKept.length)) {
-    momentKept = await detectMoments(transcript, llm, signals, evidence, length, signal, Math.min(limit, MOMENT_CHANNEL_MAX)).catch((e) => {
+    momentKept = await detectMoments(transcript, llm, signals, evidence, length, signal, Math.min(limit, MOMENT_CHANNEL_MAX), lang).catch((e) => {
       if (signal?.aborted) throw e;
       return [];
     });
@@ -851,7 +861,7 @@ export async function detectHighlights(
     );
     const settled = await runPool(
       batches.map((batch) => () =>
-        chatCompleteJson(llm, reviewSystemPrompt(transcript), buildReviewPrompt(transcript, batch), parseReviews, signal)
+        chatCompleteJson(llm, reviewSystemPrompt(transcript, lang), buildReviewPrompt(transcript, batch, lang), parseReviews, signal)
       ),
       LLM_PARALLEL
     );
@@ -859,7 +869,7 @@ export async function detectHighlights(
     // applyReviews 按 id 认领,所以跨批合并安全;缺评的 id 保持原样(fail-open)
     const reviews = settled.flatMap((s) => s.value ?? []);
     if (reviews.length === 0) return { candidates: finish(kept), funnel };
-    return { candidates: finish(applyReviews(kept, reviews, promptLanguage(transcript))), funnel };
+    return { candidates: finish(applyReviews(kept, reviews, lang)), funnel };
   } catch {
     return { candidates: finish(kept), funnel };
   }
@@ -903,7 +913,9 @@ export async function detectMoments(
   evidence: EvidenceClass,
   length: ClipLength | undefined,
   signal?: AbortSignal,
-  maxClips?: number
+  maxClips?: number,
+  /** 已判定的提示词语言;省略时按 döküm 自行判定(旧的直接调用方式)。 */
+  langOverride?: PromptLang | PromptLangChoice
 ): Promise<HighlightCandidate[]> {
   const range = CLIP_LENGTH_RANGES[length ?? "standard"];
   // words 类走到这里说明是"说话太少/文本通道没产出"触发的,按 reaction 权重兜底
@@ -918,7 +930,7 @@ export async function detectMoments(
   );
   if (moments.length === 0) return [];
 
-  const lang = promptLanguage(transcript);
+  const lang = promptLanguage(transcript, langOverride);
   const picks = await chatCompleteJson(
     llm,
     momentSystemPrompt(lang),

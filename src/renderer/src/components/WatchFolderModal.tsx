@@ -216,7 +216,7 @@ export function WatchFolderModal({ onClose }: { onClose: () => void }): React.JS
             maxLength={GENRE_CUSTOM_MAX_CHARS} value={prefs.genreCustom}
             onChange={(e) => changeSelection({ genreCustom: e.target.value })}
             className="w-full rounded-lg border border-line bg-panel-2 p-2 text-[12px] disabled:opacity-50" />}
-          <DetectionLimits clipLength={prefs.clipLength} maxClips={prefs.maxClips} disabled={running} onChange={changeSelection} />
+          <DetectionLimits clipLength={prefs.clipLength} maxClips={prefs.maxClips} promptLang={prefs.promptLang} disabled={running} onChange={changeSelection} />
           <p className="text-[10.5px] leading-relaxed text-mut">{tw("watchSelectionHint")}</p>
         </div>
 

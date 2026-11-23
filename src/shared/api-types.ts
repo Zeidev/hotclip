@@ -193,10 +193,15 @@ export interface LlmConfig {
 export type ClipLength = "short" | "standard" | "long" | "extended";
 
 /** Shared selection settings for desktop, CLI, MCP and unattended tasks. */
+/** Which prompt set detection writes in. `auto` decides from the transcript. */
+export type PromptLangChoice = "auto" | "zh" | "tr" | "en";
+
 export interface DetectionOptions {
   clipLength?: ClipLength;
   maxClips?: number;
   genre?: { id?: string; custom?: string };
+  /** Prompt language override; `auto`/unset keeps the transcript-based guess. */
+  promptLang?: PromptLangChoice;
 }
 
 /** 用户点题(v0.13):自然语言告诉 AI 本场重点找什么/明确不要什么。 */
@@ -944,7 +949,9 @@ export interface HotClipApi {
     brief?: DetectBrief | null,
     /** 全场画面扫描:视觉端点已配置时按 ~30s 一帧扫完整场,画面时刻线进选段证据(费时/云端计费,默认关)。 */
     scan?: boolean,
-    maxClips?: number
+    maxClips?: number,
+    /** 提示词语言覆盖(auto/zh/tr/en,默认 auto);导入字幕没有引擎语言时用它兜底。 */
+    promptLang?: PromptLangChoice
   ) => Promise<DetectHighlightsResult>;
   /** Cut the selected highlights into mp4 files; resolves with the file list. */
   exportClips: (filePath: string, clips: HighlightCandidate[], options?: ExportOptions) => Promise<ExportedClip[]>;

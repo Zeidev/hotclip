@@ -1,15 +1,16 @@
-import type { ClipLength } from "../../../shared/api-types";
-import { CLIP_LENGTH_RANGES, MAX_CLIPS } from "../../../shared/detection-options";
+import type { ClipLength, PromptLangChoice } from "../../../shared/api-types";
+import { CLIP_LENGTH_RANGES, MAX_CLIPS, PROMPT_LANG_CHOICES } from "../../../shared/detection-options";
 import { useT } from "../i18n/store";
 
 /** The same visible length/count controls in the workbench and recording watcher. */
 /** 1-12 每档都留,再往上给常用档:上限之外还分窗口选段(更慢更贵),不值得每档都列。 */
 const CLIP_COUNT_CHOICES = [...Array.from({ length: 12 }, (_, i) => i + 1), 15, 20, 25, 30, 35, MAX_CLIPS];
 
-export function DetectionLimits({ clipLength, maxClips, onChange, disabled = false }: {
+export function DetectionLimits({ clipLength, maxClips, promptLang, onChange, disabled = false }: {
   clipLength: ClipLength;
   maxClips: number;
-  onChange: (value: { clipLength?: ClipLength; maxClips?: number }) => void;
+  promptLang: PromptLangChoice;
+  onChange: (value: { clipLength?: ClipLength; maxClips?: number; promptLang?: PromptLangChoice }) => void;
   disabled?: boolean;
 }): React.JSX.Element {
   const t = useT("workbench");
@@ -33,7 +34,20 @@ export function DetectionLimits({ clipLength, maxClips, onChange, disabled = fal
           {CLIP_COUNT_CHOICES.map((n) => <option key={n} value={n}>{n}</option>)}
         </select>
       </label>
+      <label className="flex items-center justify-between gap-2">
+        <span className="text-mut">{t("paramPromptLang")}</span>
+        <select aria-label={t("paramPromptLang")} disabled={disabled} value={promptLang}
+          onChange={(e) => onChange({ promptLang: e.target.value as PromptLangChoice })}
+          className="min-w-0 rounded-lg border border-line bg-panel-2 px-2 py-1.5 disabled:opacity-50">
+          {PROMPT_LANG_CHOICES.map((id) => (
+            <option key={id} value={id}>
+              {id === "auto" ? t("promptLangAuto") : id === "zh" ? t("promptLangZh") : id === "tr" ? t("promptLangTr") : t("promptLangEn")}
+            </option>
+          ))}
+        </select>
+      </label>
       <p className="text-[10.5px] leading-relaxed text-mut/80">{t("selectionLimitsHint")}</p>
+      <p className="text-[10.5px] leading-relaxed text-mut/80">{t("promptLangHint")}</p>
     </div>
   );
 }
