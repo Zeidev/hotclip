@@ -9,6 +9,7 @@
  * 结果喂进来——素材照旧不出电脑。
  */
 import type { Transcript } from "../shared/api-types";
+import type { PromptLang } from "./highlight/prompt";
 
 /** 参考爆款的风格画像(全部来自实测,不猜)。 */
 export interface ReferenceProfile {
@@ -79,10 +80,11 @@ export function buildReferenceProfile(transcript: Transcript, shotBoundaries: nu
  * 画像 → 找爆点 system prompt 的追加段落(纯函数)。zh 取主素材逐句稿的
  * 语言(提示词整体语言),画像单位口径跟参考片自己(profile.zh)。
  */
-export function referencePromptSection(profile: ReferenceProfile, zh: boolean): string {
+export function referencePromptSection(profile: ReferenceProfile, lang: PromptLang): string {
+  const zh = lang === "zh";
   const lo = Math.round(profile.durationSec * 0.7);
   const hi = Math.round(profile.durationSec * 1.3);
-  const unit = profile.zh ? (zh ? "字" : "chars") : (zh ? "词" : "words");
+  const unit = profile.zh ? (zh ? "字" : lang === "tr" ? "karakter" : "chars") : zh ? "词" : lang === "tr" ? "kelime" : "words";
   if (zh) {
     const facts = [
       `时长 ${Math.round(profile.durationSec)} 秒`,
@@ -95,6 +97,20 @@ export function referencePromptSection(profile: ReferenceProfile, zh: boolean): 
       `\n\n【参考爆款画像】用户提供了一条想对标的爆款切片,实测:${facts}。` +
       `选段时向这个节奏靠拢:优先选目标时长 ${lo}~${hi} 秒、语速与信息密度相近、开场钩子形态类似(同为提问/冲突/悬念式)的片段;` +
       `这是偏好不是硬约束——内容本身的爆点潜质永远优先,不要为凑节奏选平庸段落。`
+    );
+  }
+  if (lang === "tr") {
+    const trFacts = [
+      `süre ${Math.round(profile.durationSec)} saniye`,
+      `konuşma hızı saniyede ${profile.speechRate} ${unit}`,
+      `ortalama cümle ${profile.avgSentenceLen} ${unit}`,
+      ...(profile.cutsPerMin !== null ? [`dakikada ${profile.cutsPerMin} sahne geçişi`] : []),
+      ...(profile.hookLine ? [`açılış kancası "${profile.hookLine}"`] : []),
+    ].join(", ");
+    return (
+      `\n\n[Referans viral profil] Kullanıcı örnek almak istediği bir viral kesit verdi — ölçülen: ${trFacts}. ` +
+      `Seçimi bu ritme yaklaştır: ${lo}~${hi} saniye aralığındaki, benzer tempo ve bilgi yoğunluğunda, kanca biçimi benzeyen (soru/çatışma/merak) adayları tercih et; ` +
+      `bu bir tercihtir, katı kural değil — içeriğin kendi viral potansiyeli her zaman önce gelir, sırf ritme uysun diye vasat kesit seçme.`
     );
   }
   const facts = [

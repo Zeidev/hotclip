@@ -72,14 +72,14 @@ describe("pickExamples", () => {
 
 describe("reviewMemorySection", () => {
   it("空记忆返回空串", () => {
-    expect(reviewMemorySection([], true)).toBe("");
-    expect(reviewMemorySection([rec()], true)).toBe("");
+    expect(reviewMemorySection([], "zh")).toBe("");
+    expect(reviewMemorySection([rec()], "zh")).toBe("");
   });
 
   it("中文段带否决/采用样例与'总结共性'指引", () => {
     const s = reviewMemorySection(
       [rec({ rejected: [cand("纯口播闲聊", { score: 88 })], kept: [cand("实测演示", { keywords: ["抽纸"] })] })],
-      true
+      "zh"
     );
     expect(s).toContain("【用户审阅偏好】");
     expect(s).toContain("《纯口播闲聊》");
@@ -89,8 +89,15 @@ describe("reviewMemorySection", () => {
     expect(s).toContain("共性");
   });
 
+  it("Türkçe版:原生标题与采用/否决行", () => {
+    const s = reviewMemorySection([rec({ rejected: [cand("纯口播闲聊", { score: 88 })] })], "tr");
+    expect(s).toContain("[Kullanıcının inceleme tercihleri]");
+    expect(s).toContain("Kullanıcının reddettiği adaylar");
+    expect(s).not.toContain("[User review history]");
+  });
+
   it("英文段同构", () => {
-    const s = reviewMemorySection([rec({ rejected: [cand("talking head ramble")] })], false);
+    const s = reviewMemorySection([rec({ rejected: [cand("talking head ramble")] })], "en");
     expect(s).toContain("[User review history]");
     expect(s).toContain('"talking head ramble"');
   });

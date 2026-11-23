@@ -7,6 +7,7 @@
 import { mkdir, readFile, rename, writeFile } from "fs/promises";
 import { join, dirname } from "path";
 import type { ReviewedCandidate } from "../shared/api-types";
+import type { PromptLang } from "./highlight/prompt";
 
 export type { ReviewedCandidate };
 
@@ -67,29 +68,43 @@ export function pickExamples(records: ReviewRecord[], kind: "kept" | "rejected")
   return out;
 }
 
-const exampleLine = (c: ReviewedCandidate, zh: boolean): string => {
-  const kw = c.keywords && c.keywords.length > 0 ? (zh ? `,关键词:${c.keywords.join("、")}` : `, keywords: ${c.keywords.join(", ")}`) : "";
-  return zh
-    ? `- 《${c.title}》钩子「${c.hook}」(${Math.round(c.durationSec)}s,当时评分 ${c.score}${kw})`
-    : `- "${c.title}" hook "${c.hook}" (${Math.round(c.durationSec)}s, scored ${c.score}${kw})`;
+const exampleLine = (c: ReviewedCandidate, lang: PromptLang): string => {
+  const kw =
+    c.keywords && c.keywords.length > 0
+      ? lang === "zh"
+        ? `,关键词:${c.keywords.join("、")}`
+        : lang === "tr"
+          ? `, anahtar kelimeler: ${c.keywords.join(", ")}`
+          : `, keywords: ${c.keywords.join(", ")}`
+      : "";
+  if (lang === "zh") return `- 《${c.title}》钩子「${c.hook}」(${Math.round(c.durationSec)}s,当时评分 ${c.score}${kw})`;
+  if (lang === "tr") return `- "${c.title}" kancası "${c.hook}" (${Math.round(c.durationSec)}s, o zaman ${c.score} puan${kw})`;
+  return `- "${c.title}" hook "${c.hook}" (${Math.round(c.durationSec)}s, scored ${c.score}${kw})`;
 };
 
 /**
  * 提示词注入段:没有记忆返回 ""。要求 LLM 总结共性而不是避开字面——
  * 否决样例的价值在"这类不要",不在"这几个标题不要"。
  */
-export function reviewMemorySection(records: ReviewRecord[], zh: boolean): string {
+export function reviewMemorySection(records: ReviewRecord[], lang: PromptLang): string {
   const rejected = pickExamples(records, "rejected");
   const kept = pickExamples(records, "kept");
   if (rejected.length === 0 && kept.length === 0) return "";
+  const zh = lang === "zh";
   if (zh) {
     let s = `\n\n【用户审阅偏好】(来自本机历史审阅记录,仅作参考——内容质量仍是第一判据。请总结下面样例的共性,按"同类少选/同类优先"调整,不是机械避开相同字面)`;
-    if (rejected.length > 0) s += `\n用户否决过的候选(同类少选):\n${rejected.map((c) => exampleLine(c, true)).join("\n")}`;
-    if (kept.length > 0) s += `\n用户采用过的候选(同类优先):\n${kept.map((c) => exampleLine(c, true)).join("\n")}`;
+    if (rejected.length > 0) s += `\n用户否决过的候选(同类少选):\n${rejected.map((c) => exampleLine(c, lang)).join("\n")}`;
+    if (kept.length > 0) s += `\n用户采用过的候选(同类优先):\n${kept.map((c) => exampleLine(c, lang)).join("\n")}`;
+    return s;
+  }
+  if (lang === "tr") {
+    let s = `\n\n[Kullanıcının inceleme tercihleri] (bu bilgisayardaki inceleme kayıtlarından; sadece yol gösterir — içerik kalitesi yine ilk ölçüt. Aşağıdaki örneklerin ortak yönlerini çıkarıp "benzerlerini az seç / benzerlerini öne al" diye ayarla; aynı başlıklardan mekanik olarak kaçınmak değil)`;
+    if (rejected.length > 0) s += `\nKullanıcının reddettiği adaylar (benzerlerini daha az seç):\n${rejected.map((c) => exampleLine(c, lang)).join("\n")}`;
+    if (kept.length > 0) s += `\nKullanıcının kabul ettiği adaylar (benzerlerini öne al):\n${kept.map((c) => exampleLine(c, lang)).join("\n")}`;
     return s;
   }
   let s = `\n\n[User review history] (from local review records, advisory only — content quality still rules. Generalize the patterns below; adjust toward "more like kept / fewer like rejected", never just avoid identical titles)`;
-  if (rejected.length > 0) s += `\nPreviously rejected (pick fewer like these):\n${rejected.map((c) => exampleLine(c, false)).join("\n")}`;
-  if (kept.length > 0) s += `\nPreviously kept (pick more like these):\n${kept.map((c) => exampleLine(c, false)).join("\n")}`;
+  if (rejected.length > 0) s += `\nPreviously rejected (pick fewer like these):\n${rejected.map((c) => exampleLine(c, lang)).join("\n")}`;
+  if (kept.length > 0) s += `\nPreviously kept (pick more like these):\n${kept.map((c) => exampleLine(c, lang)).join("\n")}`;
   return s;
 }

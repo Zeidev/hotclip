@@ -39,6 +39,11 @@ export const HIGHLIGHT_SYSTEM_PROMPT_ZH = `你是一位顶级短视频切片操�
 5. 笑点:必须是完整的「铺垫→包袱」结构。光有观众在笑、却没有那句抖出来的包袱,绝对不要选
 6. 硬核干货:让人想收藏的方法/清单/具体数字(平台现在收藏权重最高)
 7. 带货场景专属:产品出现意外效果、价格揭晓的那一下、真实试用翻车、被追问成分/售后
+8. 替观众说话/站队:把观众自己想说说不出口的那句话讲出来,或者立场鲜明到评论区会吵起来
+
+【评论区就是传播面】
+完播决定一条片子会不会被推,评论和转发决定它能推多远。第 8 类单看情绪强度可能不如前几类,但互动率会把它送到更大的人群面前——两条候选强度接近时,选更能让人开口回应的那条。
+立场必须是内容本身带的,不能靠结尾硬问「你们怎么看」:平台会把这种结尾判为诱导互动,反倒压流量。
 
 【开头第一句就是生死线】
 片段的第一句必须自带钩子。能停住手指的句式:
@@ -47,6 +52,7 @@ export const HIGHLIGHT_SYSTEM_PROMPT_ZH = `你是一位顶级短视频切片操�
 - 悬念型:"我发现了一个秘密"、"千万不要X"、"这就是为什么X"
 - 痛点型:"你是不是也X"、"90%的人不知道X"
 寒暄、自我介绍、"接下来我们看下一个"、慢热铺垫——一律不能当片段开头。
+开头抛出的悬念、问题或承诺,必须在片段里给出答案:只挖坑不填坑的片段,观众划走,系统也按完播排序给分。宁可把兑现答案的那一句一起框进来。
 
 【长度】
 时长 8~40 秒(对应逐句稿里约 2~8 句)。
@@ -68,7 +74,18 @@ parts 的写法:
 4. 不要输出「时:分:秒」这类时间戳——时间由系统按你抄的原文反查;但上面那两个句 id 和 score 是必填的,别一起省掉
 5. 片段之间不要重叠;宁缺毋滥,没有爆点潜质的内容不要硬凑
 6. 不能断章取义:剪出来的意思必须和原话一致。靠掐掉半句制造的"爆点"会反噬账号,一律不要
-7. title/hook/reason 用逐句稿同款语言写`;
+7. title/hook/reason 用逐句稿同款语言写
+8. 片段必须单独看得懂:要靠前几分钟铺垫才好笑的梗、得知道在跟谁说话才成立的对话,一律不要——刷到的人没有那个上下文
+
+【分数怎么打】
+score 是相对排序分,系统按它从高到低截断候选——排序错了,真正的好片会先被截掉。所以别把每条都打到 80 分以上:
+- 90 以上:这条单独发就有机会爆,全场最好的一条
+- 75-89:结构完整、钩子成立,值得发
+- 60-74:有内容但没钩子,只对老粉有意义
+- 60 以下:不要交
+真爆点应该明显高于其余候选(比如 95 对 78);全打 85 分等于没排序。
+
+【交卷前自检】逐条过一遍:第一句单独看能不能停手指?结尾收住了吗?抛出的悬念有没有在片内兑现?quoteStart/quoteEnd 是不是逐字抄的?有一条不过就删掉这条候选,不要改一改硬塞进来。`;
 
 export const HIGHLIGHT_SYSTEM_PROMPT_EN = `You are a top short-form clipping strategist. Given the sentence-level transcript of a long video, pick the segments most likely to go viral on TikTok / Reels / Shorts.
 
@@ -90,6 +107,11 @@ If you can't tell, default to content-in-the-words — but don't dress up filler
 5. Jokes: only as a complete setup→punchline unit. A clip where the audience laughs but the punchline itself is missing is NEVER acceptable
 6. Dense, saveable value: methods, checklists, concrete numbers (platforms now weight saves highest)
 7. Live-selling specifics: a product behaving unexpectedly, the moment the price drops, a demo going wrong, being pressed on ingredients or returns
+8. Speaking for the viewer / taking a side: saying out loud what the audience cannot say themselves, or a stance sharp enough to start a fight in the comments
+
+【Comments are distribution】
+Watch-through decides whether a clip gets pushed; comments and shares decide how far. Category 8 may be emotionally weaker than the ones above, but engagement rate carries it to a far larger audience — when two candidates are close, take the one people will answer.
+The stance has to come from the content: never bolt "what do you think?" onto the end — platforms read that as engagement bait and throttle it.
 
 【The first line decides everything】
 A clip's opening sentence must carry the hook. Patterns that stop the scroll:
@@ -98,6 +120,7 @@ A clip's opening sentence must carry the hook. Patterns that stop the scroll:
 - Suspense: "I found a secret", "never do X", "this is why X"
 - Pain point: "are you also X?", "90% of people don't know X"
 Greetings, self-introductions, "next up let's look at…", slow build-ups — never open a clip on these.
+Whatever the opening promises — a mystery, a question, a claim — must be answered inside the clip: viewers swipe on an unfilled promise, and platforms rank on watch-through. Frame the line that pays it off into the clip.
 
 【Length】
 Length 8–40 seconds (roughly 2–8 transcript sentences).
@@ -119,7 +142,18 @@ How to write parts:
 4. Do not output clock timestamps (hh:mm:ss) — the system reverse-matches the text you quoted; but the two sentence ids and score above ARE required, don't drop them too
 5. Clips must not overlap; quality over quantity — do not force weak picks
 6. Never quote-mine: the clipped meaning must match what was actually said. A "hook" manufactured by cutting a sentence in half will backfire on the account
-7. Write title/hook/reason in the SAME language as the transcript`;
+7. Write title/hook/reason in the SAME language as the transcript
+8. The clip must stand alone: a joke that only lands with five minutes of setup, a line that only means something if you know who is being addressed — skip them. The scroller has no context
+
+【How to score】
+score is a relative ranking and the system truncates to the top picks with it — a ranking that says nothing gets your real hit cut first. Don't put every candidate above 80:
+- 90+: this one alone could pop; the best in the stream
+- 75-89: complete structure, working hook — worth publishing
+- 60-74: has content but no hook; only existing fans care
+- below 60: don't submit it
+The genuine hit should sit clearly above the rest (95 against 78). Everything at 85 is no ranking at all.
+
+【Before you submit】Check every pick: does the first line stop the scroll on its own? Does the ending land? Is the opening's promise paid off inside the clip? Are quoteStart/quoteEnd copied verbatim? Drop any pick that fails one — never patch it and force it through.`;
 
 export const HIGHLIGHT_SYSTEM_PROMPT_TR = `Sen kısa video alanında çalışan bir kurgu stratejistsin. Sana uzun bir videonun cümle cümle dökümü veriliyor; içinden TikTok / Reels / Shorts'ta en çok izlenecek kesitleri seçeceksin.
 
@@ -141,6 +175,11 @@ Emin olamıyorsan "sözü içerik olanlar" gibi davran — ama boş lakırdıyı
 5. Espri: sadece tam bir "kurulum → vuruş" birimi olarak. Seyirci gülüyor ama asıl cümle yoksa o kesit ASLA olmaz
 6. Yoğun, kaydedilesi bilgi: yöntem, liste, somut rakamlar (platformlar artık kaydetmeyi en çok ödüllendiriyor)
 7. Canlı satışa özel: ürünün beklenmedik tepki vermesi, fiyatın açıklandığı an, denemenin ters gitmesi, içerik/iade konusunda sıkıştırılması
+8. Seyirci yerine konuşmak / taraf olmak: seyircinin kendi söyleyemediğini yüksek sesle söylemek ya da yorumlarda kavga çıkaracak kadar net bir tavır almak
+
+【Yorumlar yayılma alanıdır】
+Bir kesitin öne çıkıp çıkmayacağını sonuna kadar izlenmesi, ne kadar uzağa gideceğini yorum ve paylaşım belirler. 8. kategori duygu olarak yukarıdakilerden zayıf olabilir, ama etkileşim oranı onu çok daha kalabalığa taşır — iki aday birbirine yakınsa, insanların cevap vereceğini seç.
+Tavır içeriğin kendisinden gelmeli: sonuna "siz ne düşünüyorsunuz?" yapıştırma; platform bunu etkileşim dilenciliği sayıp erişimi kısıyor.
 
 【İlk cümle her şeyi belirler】
 Kesitin açılış cümlesi kancayı kendi taşımalı. Türkçede parmağı durduran kalıplar:
@@ -149,6 +188,7 @@ Kesitin açılış cümlesi kancayı kendi taşımalı. Türkçede parmağı dur
 - Merak: "Az önce ne oldu biliyor musun?", "Bu videoyu kaydet, sonra teşekkür edersin", "Sakın … yapma"
 - Dert noktası: "Sen de … mı yaşıyorsun?", "İnsanların %90'ı bunu bilmiyor"
 Selamlama, kendini tanıtma, "şimdi sıradaki konuya geçelim", yavaş giriş — kesitin açılışı bunlar asla olmaz.
+Açılışın kurduğu söz — merak, soru ya da iddia — kesitin içinde cevaplanmalı: sözünü tutmayan kesitte izleyici kaydırıp gider, platform da sonuna kadar izlenmeye göre sıralıyor. Cevabı veren cümleyi de kesite al.
 
 【Süre】
 Süre 8–40 saniye (kabaca 2–8 cümle).
@@ -170,7 +210,18 @@ parts nasıl yazılır:
 4. "ss:dd:dd" gibi saat damgası yazma — zamanı sistem alıntıladığın metinden geri bulur; ama yukarıdaki iki cümle id'si ve score ZORUNLU, onları da atlama
 5. Kesitler birbiriyle çakışmamalı; nitelik nicelikten önce gelir — kanca potansiyeli olmayan içeriği zorla ekleme
 6. Cımbızlama yasak: kesilen anlam gerçekten söylenenle aynı olmalı. Cümleyi yarıda keserek üretilen "kanca" hesaba zarar verir
-7. title/hook/reason dökümün diliyle (Türkçe) yazılmalı`;
+7. title/hook/reason dökümün diliyle (Türkçe) yazılmalı
+8. Kesit tek başına anlaşılmalı: beş dakikalık hazırlık olmadan gülünmeyen bir espri, kime söylendiğini bilmeden anlaşılmayan bir laf — geç. Kaydıran izleyicinin o bağlamı yok
+
+【Puan nasıl verilir】
+score göreli sıralama puanıdır; sistem listeyi buna göre ilk adaylara indirir — hiçbir şey söylemeyen bir sıralama, gerçek vuruşunu ilk sana kaybettirir. Her adaya 80 üstü verme:
+- 90+: bu tek başına patlayabilir; yayının en iyisi
+- 75-89: yapısı tam, kancası oturuyor — yayınlanmaya değer
+- 60-74: içeriği var ama kancası yok; sadece mevcut takipçin izler
+- 60 altı: hiç gönderme
+Gerçek vuruş diğerlerinin belirgin üstünde olmalı (78'e karşı 95). Hepsi 85 ise sıralama yok demektir.
+
+【Göndermeden önce】Her adayı tek tek kontrol et: ilk cümle tek başına parmağı durduruyor mu? Sonu oturuyor mu? Açılışın sözü kesit içinde ödendi mi? quoteStart/quoteEnd birebir kopyalanmış mı? Bunlardan biri tutmuyorsa o adayı sil — düzeltip zorla gönderme.`;
 
 /** zh when the engine says so or the text itself is CJK-dominant. */
 export function isChineseTranscript(transcript: Transcript): boolean {
@@ -248,16 +299,17 @@ export function highlightSystemPrompt(
       .replace("Süre 8–40 saniye", `Süre ${minSec}–${maxSec} saniye (katı kural, kısa kalması uzamasından iyidir)`);
   }
   // 品类判据:不同品类连"该信哪路证据"都不一样,放在通用判据之后覆盖它
+  // (品类预设只有 zh/en 两版文字,tr 仍注入 en;补齐见 docs/releases/v0.34.0.md 的已知缺口)
   if (genre) base += genreSection(genre.id, zh, genre.custom);
-  if (products.length > 0) base += productSection(products, zh);
+  if (products.length > 0) base += productSection(products, lang);
   // 用户点题:明确的人工意图,优先级压过通用判据(对齐 OpusClip Contextual Prompting)
-  base += briefSection(brief, zh);
+  base += briefSection(brief, lang);
   // 参考爆款画像:节奏偏好段(用户丢了对标切片时才有)
-  if (reference) base += referencePromptSection(reference, zh);
+  if (reference) base += referencePromptSection(reference, lang);
   // 审阅偏好回流:本机历史采用/否决样例(空记忆返回 "")
-  if (reviewMemory && reviewMemory.length > 0) base += reviewMemorySection(reviewMemory, zh);
+  if (reviewMemory && reviewMemory.length > 0) base += reviewMemorySection(reviewMemory, lang);
   // 真实发布表现:观众结果信号比模型猜热点更硬,但仍只作趋势证据
-  if (performanceMemory && performanceMemory.length > 0) base += performanceMemorySection(performanceMemory, zh);
+  if (performanceMemory && performanceMemory.length > 0) base += performanceMemorySection(performanceMemory, lang);
   return base;
 }
 
@@ -266,7 +318,8 @@ export function highlightSystemPrompt(
  * 演示/实测 > 卖点讲解 > 价格机制 > 催单 > 答疑;憋单/高压催单段有
  * 平台违规风险,明确排除。话术信号词帮 LLM 定位讲解区间的起止。
  */
-export function productSection(products: string[], zh: boolean): string {
+export function productSection(products: string[], lang: PromptLang): string {
+  const zh = lang === "zh";
   const list = products.join(zh ? "、" : ", ");
   if (zh) {
     return (
@@ -279,6 +332,19 @@ export function productSection(products: string[], zh: boolean): string {
       `\n【带货三段式拼接】2026 年最能出单的带货切片结构是「痛点→演示→价格」三段:开头一句戳中为什么需要它,中间接试用/实测的眼见为实,结尾落在价格/机制给出下单理由。` +
       `同一商品的这三类内容在直播里往往相隔很远——只要能凑齐其中两到三段,就优先用 parts 按「痛点→演示→价格」的顺序拼成一条完整种草片(每段完整不掐断,总时长仍守上限),并在 reason 里写明拼了哪几个要素;` +
       `要素凑不齐就不硬拼,按单段选。拼接仍然不许改变原意——痛点和演示必须真的在说同一个商品。`
+    );
+  }
+  if (lang === "tr") {
+    return (
+      `\n\n[Ürün anlatımı modu] Kullanıcı şu ürün kelimelerini verdi: ${list}. Bu yayın canlı satış — sadece bu ürünlerle doğrudan ilgili kesitleri seç ve dönüşüm değerine göre sırala: ` +
+      `(1) deneme / üzerinde gösterme / canlı test anları (görmek inandırır, en öncelikli) (2) temel satış noktası anlatımı (kumaş/içerik/karşılaştırma) ` +
+      `(3) fiyat ve kampanya mekaniği ("normalde X, bugün Y", "bir alana bir bedava", "kuponla birlikte") (4) harekete geçirme cümleleri sadece anlatıma ya da link anına bitişikse kalsın, tek başına kesit olmasın (5) itiraz giderme (beden/içerik/iade). ` +
+      `Anlatı bölümleri genelde "sıradaki ürüne geçiyoruz / X numaralı linkteki ürünü anlatıyorum" ile başlar, "bir sonraki ürüne bakıyoruz" ile biter — konumu bununla bulabilirsin. ` +
+      `Asla seçme: ürünle ilgisiz sohbet, seyirci bekleme, sırf etkileşim için bekletme ("şu kadar beğeni gelirse linki açarım" — platform bunu ihlal sayar, kesip paylaşmak erişimi kısar), aynı fiyat metninin mekanik tekrarı, anlatımın yarıda kesildiği ya da ürünün eksik kaldığı parçalar. ` +
+      `Her adayın keywords alanı eşleştiği ürün kelimelerini içermeli.` +
+      `\n[Satışta üç perde] 2026'da en çok sattıran satış kesiti "dert → deneme → fiyat" üç perdesidir: açılışta neden gerekli olduğunu söyleyen bir cümle, ortada canlı deneme, sonda fiyat/kampanya ile satın alma gerekçesi. ` +
+      `Aynı ürünün bu üç parçası yayında çoğu zaman birbirinden çok uzaktır — ikisini ya da üçünü bir araya getirebiliyorsan dert→deneme→fiyat sırasıyla "parts" ile tek bir kesite birleştirmeyi tercih et (her parça tam ve kesilmemiş, toplam süre yine sınır içinde) ve reason içinde hangi perdeleri birleştirdiğini yaz; ` +
+      `perdeler tam değilse zorlama, tek ve kesintisiz bir kesit seç. Birleştirme anlamı asla değiştirmemeli: dert ve deneme gerçekten aynı ürünle ilgili olmalı.`
     );
   }
   return (
@@ -300,10 +366,11 @@ export const BRIEF_MAX_CHARS = 300;
  * 这是唯一一段真正的人工意图,优先级要压过所有自动判据——但排除不等于
  * 无中生有:重点内容在素材里真不存在时宁可少给,不许硬凑。
  */
-export function briefSection(brief: { focus?: string; exclude?: string } | undefined, zh: boolean): string {
+export function briefSection(brief: { focus?: string; exclude?: string } | undefined, lang: PromptLang): string {
   const focus = brief?.focus?.trim().slice(0, BRIEF_MAX_CHARS) ?? "";
   const exclude = brief?.exclude?.trim().slice(0, BRIEF_MAX_CHARS) ?? "";
   if (!focus && !exclude) return "";
+  const zh = lang === "zh";
   if (zh) {
     const lines = [
       "\n\n【用户点题】用户对本场切片提了明确要求,优先级高于上面的通用判据:",
@@ -312,6 +379,15 @@ export function briefSection(brief: { focus?: string; exclude?: string } | undef
       "点题只改变「找什么」,不改变质量标准——素材里真没有用户要的内容时,宁可少给或不给,绝不硬凑不相关的片段充数。",
     ];
     return lines.join("\n");
+  }
+  if (lang === "tr") {
+    const trLines = [
+      "\n\n[Kullanıcı notu] Kullanıcı bu oturum için net istekler verdi; bunlar yukarıdaki genel ölçütlerin üstündedir:",
+      ...(focus ? [`- Özellikle ara: ${focus}`] : []),
+      ...(exclude ? [`- Kesinlikle dışla: ${exclude} (bu içerik ne kadar güçlü olursa olsun seçme)`] : []),
+      "Not, neyi arayacağını değiştirir; kalite çıtasını değiştirmez — istenen içerik görüntüde yoksa alakasız kesitlerle doldurmak yerine daha az kesit döndür.",
+    ];
+    return trLines.join("\n");
   }
   const lines = [
     "\n\n[User brief] The user gave explicit instructions for this session — they override the general criteria above:",
@@ -392,68 +468,79 @@ function fmtClock(sec: number): string {
 }
 
 /** Render Tier-0 audiovisual evidence for prompt injection ("" when empty). */
-export function renderSignals(signals: MediaSignals | undefined, zh: boolean): string {
+export function renderSignals(signals: MediaSignals | undefined, lang: PromptLang): string {
   if (!signals) return "";
+  const zh = lang === "zh";
+  /** 每行三种语言各写各的——tr 不是 en 的翻译(与选段段落同一规矩)。 */
+  const t = (zhText: string, trText: string, enText: string): string => (zh ? zhText : lang === "tr" ? trText : enText);
   const fmt = (rs: Array<{ startSec: number; endSec: number }>): string =>
     rs.map((r) => `${fmtClock(r.startSec)}-${fmtClock(r.endSec)}`).join(", ");
   const lines: string[] = [];
   if (signals.loudPeaks.length > 0) {
-    lines.push(zh ? `- 响度峰值时段(情绪爆发/笑声/喊叫): ${fmt(signals.loudPeaks)}` : `- Loudness peaks (bursts/laughter/shouting): ${fmt(signals.loudPeaks)}`);
+    lines.push(t(`- 响度峰值时段(情绪爆发/笑声/喊叫): ${fmt(signals.loudPeaks)}`, `- Ses yüksekliği zirveleri (patlama/gülüşme/bağırma): ${fmt(signals.loudPeaks)}`, `- Loudness peaks (bursts/laughter/shouting): ${fmt(signals.loudPeaks)}`));
   }
   if (signals.cutDense.length > 0) {
-    lines.push(zh ? `- 镜头切换密集段(画面高能): ${fmt(signals.cutDense)}` : `- Dense scene-cut windows (visual action): ${fmt(signals.cutDense)}`);
+    lines.push(t(`- 镜头切换密集段(画面高能): ${fmt(signals.cutDense)}`, `- Yoğun plan geçişi aralıkları (görüntüde hareket): ${fmt(signals.cutDense)}`, `- Dense scene-cut windows (visual action): ${fmt(signals.cutDense)}`));
   }
   if (signals.motionPeaks && signals.motionPeaks.length > 0) {
-    lines.push(zh ? `- 画面运动活跃段(低分辨率帧差,动作/移动线索): ${fmt(signals.motionPeaks)}` : `- Motion-active windows (low-resolution frame differences; action/movement cue): ${fmt(signals.motionPeaks)}`);
+    lines.push(t(`- 画面运动活跃段(低分辨率帧差,动作/移动线索): ${fmt(signals.motionPeaks)}`, `- Görüntü hareketinin yoğun olduğu aralıklar (düşük çözünürlüklü kare farkı; aksiyon/hareket ipucu): ${fmt(signals.motionPeaks)}`, `- Motion-active windows (low-resolution frame differences; action/movement cue): ${fmt(signals.motionPeaks)}`));
   }
   if (signals.visualPeaks && signals.visualPeaks.length > 0) {
-    lines.push(zh ? `- 视觉模型判定的画面爆点时刻(夸张表情/激烈动作/场面炸裂): ${fmt(signals.visualPeaks)}` : `- Vision-model visual peaks (expressions/action/spectacle): ${fmt(signals.visualPeaks)}`);
+    lines.push(t(`- 视觉模型判定的画面爆点时刻(夸张表情/激烈动作/场面炸裂): ${fmt(signals.visualPeaks)}`, `- Görsel modelin işaretlediği görüntü zirveleri (abartılı ifade/sert aksiyon/olay): ${fmt(signals.visualPeaks)}`, `- Vision-model visual peaks (expressions/action/spectacle): ${fmt(signals.visualPeaks)}`));
   }
   if (signals.emotionPeaks && signals.emotionPeaks.length > 0) {
-    lines.push(zh ? `- 人脸表情峰值时段(大笑/惊讶/激动): ${fmt(signals.emotionPeaks)}` : `- Facial-emotion peaks (laughter/surprise/excitement): ${fmt(signals.emotionPeaks)}`);
+    lines.push(t(`- 人脸表情峰值时段(大笑/惊讶/激动): ${fmt(signals.emotionPeaks)}`, `- Yüz ifadesi zirveleri (kahkaha/şaşkınlık/heyecan): ${fmt(signals.emotionPeaks)}`, `- Facial-emotion peaks (laughter/surprise/excitement): ${fmt(signals.emotionPeaks)}`));
   }
   if (signals.voiceEmotionPeaks && signals.voiceEmotionPeaks.length > 0) {
-    lines.push(zh ? `- 说话人语气激动时段(笑着说/吼出来/惊到了——同一句话文字看不出的情绪): ${fmt(signals.voiceEmotionPeaks)}` : `- Vocal-emotion peaks (said while laughing / shouted / startled — tone the text cannot show): ${fmt(signals.voiceEmotionPeaks)}`);
+    lines.push(t(`- 说话人语气激动时段(笑着说/吼出来/惊到了——同一句话文字看不出的情绪): ${fmt(signals.voiceEmotionPeaks)}`, `- Ses heyecanı zirveleri (gülerek söylenmiş / bağırarak / irkilerek — aynı cümlede metnin gösteremediği ton): ${fmt(signals.voiceEmotionPeaks)}`, `- Vocal-emotion peaks (said while laughing / shouted / startled — tone the text cannot show): ${fmt(signals.voiceEmotionPeaks)}`));
   }
   if (signals.audioEventPeaks && signals.audioEventPeaks.length > 0) {
     // 笑声是滞后结果:包袱在它之前。这里必须写清用法,否则 LLM 会直接切哄笑段(那里没人说话)
     lines.push(
-      zh
-        ? `- 观众笑声/掌声时段: ${fmt(signals.audioEventPeaks)}\n  ⚠ 笑声是「结果」不是爆点本身——引爆它的那句包袱落在笑声开始之前。要往前找到那句话、连同它的铺垫一起选,笑声只留一点点做收尾;绝不要只切观众在笑的那几秒(那里根本没人说话)`
-        : `- Audience laughter / applause: ${fmt(signals.audioEventPeaks)}\n  ⚠ Laughter is the RESULT, not the highlight — the punchline that triggered it lands BEFORE the laughter starts. Walk back to that line, include its setup, and keep only a beat of laughter as the tail; never clip just the laughing seconds (nobody is speaking there)`
+      t(
+        `- 观众笑声/掌声时段: ${fmt(signals.audioEventPeaks)}\n  ⚠ 笑声是「结果」不是爆点本身——引爆它的那句包袱落在笑声开始之前。要往前找到那句话、连同它的铺垫一起选,笑声只留一点点做收尾;绝不要只切观众在笑的那几秒(那里根本没人说话)`,
+        `- Seyirci gülüşmesi / alkış: ${fmt(signals.audioEventPeaks)}\n  ⚠ Gülüşme SONUÇTUR, vuruşun kendisi değil — onu patlatan cümle gülüşme başlamadan ÖNCE gelir. O cümleye geri yürü, hazırlığını da kesite al, gülüşmeden sadece küçük bir kuyruk bırak; asla sadece gülen birkaç saniyeyi kesme (orada kimse konuşmuyor)`,
+        `- Audience laughter / applause: ${fmt(signals.audioEventPeaks)}\n  ⚠ Laughter is the RESULT, not the highlight — the punchline that triggered it lands BEFORE the laughter starts. Walk back to that line, include its setup, and keep only a beat of laughter as the tail; never clip just the laughing seconds (nobody is speaking there)`
+      )
     );
   }
   if (signals.danmakuPeaks && signals.danmakuPeaks.length > 0) {
-    lines.push(zh ? `- 弹幕热度峰值时段(观众实时高能反应,证据力最强): ${fmt(signals.danmakuPeaks)}` : `- Live-chat density peaks (real-time audience hype, strongest evidence): ${fmt(signals.danmakuPeaks)}`);
+    lines.push(t(`- 弹幕热度峰值时段(观众实时高能反应,证据力最强): ${fmt(signals.danmakuPeaks)}`, `- Canlı sohbet yoğunluğu zirveleri (seyircinin anlık yüksek tepkisi, en güçlü kanıt): ${fmt(signals.danmakuPeaks)}`, `- Live-chat density peaks (real-time audience hype, strongest evidence): ${fmt(signals.danmakuPeaks)}`));
   }
   if (signals.clipCommandMarks && signals.clipCommandMarks.length > 0) {
     const marks = signals.clipCommandMarks.map(fmtClock).join(", ");
     // 口令与笑声同理是滞后标记:被认证的内容在口令之前——用法必须写死在提示词里
     lines.push(
-      zh
-        ? `- 主播剪辑口令时刻(主播亲口说「这段剪下来/切片」——他本人实时认证的爆点,证据力最高): ${marks}\n  ⚠ 口令指的是它**之前**刚发生的内容:从口令时刻往前找到被指的那段完整内容来选,不要把口令本身当片段(必要时可把口令那句留作收尾)`
-        : `- Streamer clip commands (the host literally said "clip that" — self-certified highlights, highest-value evidence): ${marks}\n  ⚠ The command points at what JUST happened **before** it: walk back from the mark to the complete moment being referenced; never clip the command line itself (at most keep it as the tail)`
+      t(
+        `- 主播剪辑口令时刻(主播亲口说「这段剪下来/切片」——他本人实时认证的爆点,证据力最高): ${marks}\n  ⚠ 口令指的是它**之前**刚发生的内容:从口令时刻往前找到被指的那段完整内容来选,不要把口令本身当片段(必要时可把口令那句留作收尾)`,
+        `- Yayıncının kesme komutu anları (yayıncı "burayı kes" dedi — kendi anında onayladığı vuruş, en güçlü kanıt): ${marks}\n  ⚠ Komut, hemen **öncesinde** olana işaret eder: o andan geri yürüyüp kastedilen tam içeriği seç; komutun kendisini kesit yapma (gerekiyorsa o cümle en fazla kuyruk olarak kalır)`,
+        `- Streamer clip commands (the host literally said "clip that" — self-certified highlights, highest-value evidence): ${marks}\n  ⚠ The command points at what JUST happened **before** it: walk back from the mark to the complete moment being referenced; never clip the command line itself (at most keep it as the tail)`
+      )
     );
   }
   if (signals.visualNotes && signals.visualNotes.length > 0) {
     const notes = signals.visualNotes
       .map((n) => {
         const text = n.visibleText?.length
-          ? (zh ? ` [屏显:${n.visibleText.join(" / ")}]` : ` [visible text: ${n.visibleText.join(" / ")}]`)
+          ? t(` [屏显:${n.visibleText.join(" / ")}]`, ` [ekranda: ${n.visibleText.join(" / ")}]`, ` [visible text: ${n.visibleText.join(" / ")}]`)
           : "";
-        return `${fmtClock(n.t)} ${n.note || (zh ? "画面高能" : "visual peak")}(${n.energy}/10)${text}`;
+        return `${fmtClock(n.t)} ${n.note || t("画面高能", "görüntü zirvesi", "visual peak")}(${n.energy}/10)${text}`;
       })
-      .join(zh ? ";" : "; ");
+      .join("; ");
     lines.push(
-      zh
-        ? `- 全场画面时刻线(视觉模型逐段扫过整场后的画面描述——文字稿看不见的画面事件都在这里): ${notes}\n  与其中高分时刻重合的内容,画面上真的有东西;文字平平但画面描述炸裂的时刻值得选`
-        : `- Full-stream visual timeline (a vision model swept the whole stream — on-screen events the transcript cannot show): ${notes}\n  Moments overlapping high-energy notes really have something on screen; flat text + explosive visuals is still a pick`
+      t(
+        `- 全场画面时刻线(视觉模型逐段扫过整场后的画面描述——文字稿看不见的画面事件都在这里): ${notes}\n  与其中高分时刻重合的内容,画面上真的有东西;文字平平但画面描述炸裂的时刻值得选`,
+        `- Yayının tamamının görüntü zaman çizelgesi (görsel model bütün yayını taradı — dökümün gösteremediği ekran olayları burada): ${notes}\n  Yüksek puanlı notlarla örtüşen anlarda ekranda gerçekten bir şey var; metni düz ama görüntü notu patlayan anlar yine seçilesi`,
+        `- Full-stream visual timeline (a vision model swept the whole stream — on-screen events the transcript cannot show): ${notes}\n  Moments overlapping high-energy notes really have something on screen; flat text + explosive visuals is still a pick`
+      )
     );
   }
   if (lines.length === 0) return "";
-  return zh
-    ? `\n【画面与声音信号】(辅助证据——与这些时段重合的内容更可能有真实的情绪/画面爆点,但仍以文本质量为准)\n${lines.join("\n")}\n`
-    : `\n【Audiovisual signals】(supporting evidence — content overlapping these windows likely has real emotional/visual peaks; text quality still rules)\n${lines.join("\n")}\n`;
+  return t(
+    `\n【画面与声音信号】(辅助证据——与这些时段重合的内容更可能有真实的情绪/画面爆点,但仍以文本质量为准)\n${lines.join("\n")}\n`,
+    `\n【Görüntü ve ses sinyalleri】 (destekleyici kanıt — bu aralıklarla örtüşen içerikte gerçek duygu/görüntü zirvesi olma olasılığı daha yüksek; ama kararı yine metin kalitesi verir)\n${lines.join("\n")}\n`,
+    `\n【Audiovisual signals】(supporting evidence — content overlapping these windows likely has real emotional/visual peaks; text quality still rules)\n${lines.join("\n")}\n`
+  );
 }
 
 /** Multi-speaker attribution guidance, injected only when diarized ≥2 speakers. */
@@ -474,7 +561,7 @@ export function buildHighlightPrompt(transcript: Transcript, maxClips = 6, signa
 
 【逐句稿】(格式: [句id] 开始时间 内容)
 ${renderTranscriptLines(transcript)}
-${speakerNote(transcript, lang)}${renderSignals(signals, true)}
+${speakerNote(transcript, lang)}${renderSignals(signals, lang)}
 【输出格式】严格输出 JSON,不要任何多余文字:
 ${OUTPUT_SHAPE}
 
@@ -488,7 +575,7 @@ ${PARTS_SHAPE_ZH}
 
 【Döküm】(biçim: [cümleId] başlangıç saati metin)
 ${renderTranscriptLines(transcript)}
-${speakerNote(transcript, lang)}${renderSignals(signals, false)}
+${speakerNote(transcript, lang)}${renderSignals(signals, lang)}
 【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:
 ${OUTPUT_SHAPE}
 
@@ -501,7 +588,7 @@ score yüksekten aşağıya sırala; kesitler birbiriyle çakışmasın.`;
 
 【Transcript】(format: [sentenceId] startTime text)
 ${renderTranscriptLines(transcript)}
-${speakerNote(transcript, lang)}${renderSignals(signals, false)}
+${speakerNote(transcript, lang)}${renderSignals(signals, lang)}
 【Output format】Respond with STRICT JSON only, no extra text:
 ${OUTPUT_SHAPE}
 

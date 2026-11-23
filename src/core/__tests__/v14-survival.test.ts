@@ -85,7 +85,7 @@ describe("applyUtilitySignal(第十路回流)", () => {
         cand({ id: 2, text: "哈哈哈太好笑了" }),
         cand({ id: 3, boundary: "signal", text: "第一步第二步第三步" }),
       ],
-      true
+      "zh"
     );
     expect(out[0].utility).toBeDefined();
     expect(out[0].score).toBeGreaterThan(80);

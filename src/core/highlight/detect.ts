@@ -15,7 +15,6 @@ import {
   buildReviewPrompt,
   extractJson,
   CLIP_LENGTH_RANGES,
-  isChineseTranscript,
   promptLanguage,
   type PromptLang,
   momentSystemPrompt,
@@ -641,7 +640,8 @@ export async function detectHighlights(
   maxClips?: number
 ): Promise<DetectOutcome> {
   if (transcript.segments.length === 0) return { candidates: [] };
-  const zh = isChineseTranscript(transcript);
+  // 语言一次判定,贯穿提示词、规则门与加分理由(zh/tr/en,tr 不再借 en 文案)
+  const lang = promptLanguage(transcript);
   const limit = normalizeMaxClips(maxClips);
 
   // 主播口令打点(v0.13):「这段剪下来/clip that」是主播自证的爆点,纯文本
@@ -746,7 +746,7 @@ export async function detectHighlights(
   // 实用密度在复评之后加分(复评会覆写 score),在归一化之前(要影响排序)。
   const publishable = (c: HighlightCandidate): number => Number(c.recommended && (c.gate === undefined || c.gate === "publish"));
   const finish = (list: HighlightCandidate[]): HighlightCandidate[] =>
-    applyRuleGate(transcript, normalizeScores(applyUtilitySignal(list, zh)), zh)
+    applyRuleGate(transcript, normalizeScores(applyUtilitySignal(list, lang)), lang)
       // Choose the strongest usable candidates before restoring timeline order.
       // Taking the earliest N first can discard every publishable late highlight.
       .sort((a, b) => publishable(b) - publishable(a) || b.score - a.score)
@@ -775,14 +775,17 @@ export async function detectHighlights(
  * 「精彩」不同的维度——密度只做加分项,不推翻爆点排序。信号候选跳过
  * (它们不是按文本立身的)。
  */
-export function applyUtilitySignal(candidates: HighlightCandidate[], zh: boolean): HighlightCandidate[] {
+export function applyUtilitySignal(candidates: HighlightCandidate[], lang: PromptLang): HighlightCandidate[] {
   return candidates.map((c) => {
     if (c.boundary === "signal") return c;
     const u = utilityDensity(c.text);
     if (u.score < UTILITY_SAVE_WORTHY) return c;
-    const note = zh
-      ? `实用密度 ${u.score}/10(${u.hits.slice(0, 3).join("/")}),可收藏内容`
-      : `utility density ${u.score}/10 (${u.hits.slice(0, 3).join("/")}), save-worthy`;
+    const note =
+      lang === "zh"
+        ? `实用密度 ${u.score}/10(${u.hits.slice(0, 3).join("/")}),可收藏内容`
+        : lang === "tr"
+          ? `bilgi yoğunluğu ${u.score}/10 (${u.hits.slice(0, 3).join("/")}), kaydedilesi içerik`
+          : `utility density ${u.score}/10 (${u.hits.slice(0, 3).join("/")}), save-worthy`;
     return {
       ...c,
       score: Math.min(99, c.score + utilityBoost(u.score)),

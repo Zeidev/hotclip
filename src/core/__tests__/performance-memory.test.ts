@@ -65,7 +65,7 @@ describe("performance prompt feedback", () => {
     const examples = performanceExamples(rows);
     expect(examples.winners[0].title).toBe("强片");
     expect(examples.laggards.map((e) => e.title)).toContain("弱片");
-    const prompt = performanceMemorySection(rows, true);
+    const prompt = performanceMemorySection(rows, "zh");
     expect(prompt).toContain("【真实发布表现】");
     expect(prompt).toContain("高表现样例");
     expect(prompt).toContain("低表现样例");
@@ -78,6 +78,15 @@ describe("performance prompt feedback", () => {
     });
     await clearPerformanceMemory(dir);
     expect(await loadPerformanceMemory(dir)).toEqual([]);
+  });
+
+  it("Türkçe版:原生标题与高/低表现行", () => {
+    const rows = [entry("弱片", 10_000, 5), entry("强片", 10_000, 900), entry("中1", 1000, 20), entry("中2", 2000, 30)];
+    const prompt = performanceMemorySection(rows, "tr");
+    expect(prompt).toContain("[Gerçek yayın performansı]");
+    expect(prompt).toContain("Yüksek performanslı örnekler");
+    expect(prompt).toContain("Düşük performanslı örnekler");
+    expect(prompt).not.toContain("[Real post performance]");
   });
 
   it("is wired into the highlight system prompt", () => {

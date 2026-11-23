@@ -64,7 +64,7 @@ describe("referencePromptSection (提示词段落)", () => {
   );
 
   it("中文段落:含实测维度与 ±30% 目标时长,声明偏好不是硬约束", () => {
-    const s = referencePromptSection(profile, true);
+    const s = referencePromptSection(profile, "zh");
     expect(s).toContain("参考爆款画像");
     expect(s).toContain("时长 30 秒");
     expect(s).toContain("21~39 秒"); // 30 的 ±30%
@@ -74,14 +74,22 @@ describe("referencePromptSection (提示词段落)", () => {
   });
 
   it("英文段落:同样含目标区间与非硬约束声明", () => {
-    const s = referencePromptSection(profile, false);
+    const s = referencePromptSection(profile, "en");
     expect(s).toContain("Reference clip profile");
     expect(s).toContain("21–39s");
     expect(s).toContain("not a hard rule");
   });
 
+  it("Türkçe版:原生标题与单位(en'e düşmez)", () => {
+    const s = referencePromptSection(profile, "tr");
+    expect(s).toContain("[Referans viral profil]");
+    expect(s).toContain("21~39 saniye");
+    expect(s).toContain("dakikada 30 sahne geçişi");
+    expect(s).not.toContain("Reference clip profile");
+  });
+
   it("镜头维度缺失时不输出该项", () => {
     const noCuts = { ...profile, cutsPerMin: null };
-    expect(referencePromptSection(noCuts, true)).not.toContain("镜头切换");
+    expect(referencePromptSection(noCuts, "zh")).not.toContain("镜头切换");
   });
 });

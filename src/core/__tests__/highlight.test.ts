@@ -470,6 +470,35 @@ describe("Türkçe prompt yolu", () => {
     expect(p).toContain("payoffNote");
     expect(p).toContain("loop = ≤30 sn kesit dikişsiz");
   });
+
+  it("viral öğreti üç dilde de var(puan çıpası + sözün ödenmesi + tek başına anlaşılırlık)", () => {
+    const tr = highlightSystemPrompt(trTx);
+    expect(tr).toContain("【Puan nasıl verilir】");
+    expect(tr).toContain("Açılışın kurduğu söz");
+    expect(tr).toContain("Kesit tek başına anlaşılmalı");
+    expect(tr).toContain("【Yorumlar yayılma alanıdır】");
+    expect(tr).toContain("【Göndermeden önce】");
+    const zh = highlightSystemPrompt(makeTranscript(["第一句话。"]));
+    expect(zh).toContain("【分数怎么打】");
+    expect(zh).toContain("只挖坑不填坑");
+    expect(zh).toContain("【评论区就是传播面】");
+    expect(zh).toContain("片段必须单独看得懂");
+    expect(zh).toContain("【交卷前自检】");
+    const en: Transcript = { ...makeTranscript(["First sentence here."]), language: "en" };
+    expect(highlightSystemPrompt(en)).toContain("【How to score】");
+    expect(highlightSystemPrompt(en)).toContain("【Comments are distribution】");
+    expect(highlightSystemPrompt(en)).toContain("The clip must stand alone");
+    expect(highlightSystemPrompt(en)).toContain("【Before you submit】");
+  });
+
+  it("Türkçe koşuda yardımcı bölümler de Türkçe(en'e düşmez)", () => {
+    const sys = highlightSystemPrompt(trTx, "standard", ["deterjan"], undefined, undefined, undefined, { focus: "kampanya fiyatı" });
+    expect(sys).toContain("[Ürün anlatımı modu]");
+    expect(sys).toContain("[Kullanıcı notu]");
+    expect(sys).not.toContain("[Product mode]");
+    expect(sys).not.toContain("[User brief]");
+    expect(/[一-鿿]/.test(sys)).toBe(false);
+  });
 });
 
 describe("时长档 (clip length)", () => {
@@ -498,36 +527,45 @@ describe("renderSignals / signal injection", () => {
   };
 
   it("renders bilingual signal blocks with MM:SS ranges", () => {
-    const zh = renderSignals(signals, true);
+    const zh = renderSignals(signals, "zh");
     expect(zh).toContain("画面与声音信号");
     expect(zh).toContain("03:12-03:18");
-    const en = renderSignals(signals, false);
+    const en = renderSignals(signals, "en");
     expect(en).toContain("Audiovisual signals");
     expect(en).toContain("08:20-08:35");
   });
 
   it("empty signals render nothing", () => {
-    expect(renderSignals({ loudPeaks: [], cutDense: [] }, true)).toBe("");
-    expect(renderSignals(undefined, true)).toBe("");
+    expect(renderSignals({ loudPeaks: [], cutDense: [] }, "zh")).toBe("");
+    expect(renderSignals(undefined, "zh")).toBe("");
   });
 
   it("emotionPeaks 存在时渲染表情峰值行", () => {
     const withEmotion = { ...signals, emotionPeaks: [{ startSec: 30, endSec: 42 }] };
-    const zh = renderSignals(withEmotion, true);
+    const zh = renderSignals(withEmotion, "zh");
     expect(zh).toContain("人脸表情峰值时段");
     expect(zh).toContain("00:30-00:42");
-    expect(renderSignals(withEmotion, false)).toContain("Facial-emotion peaks");
-    expect(renderSignals(signals, true)).not.toContain("表情峰值");
+    expect(renderSignals(withEmotion, "en")).toContain("Facial-emotion peaks");
+    expect(renderSignals(signals, "zh")).not.toContain("表情峰值");
   });
 
   it("visualPeaks 存在时渲染视觉爆点行", () => {
     const withVision = { ...signals, visualPeaks: [{ startSec: 60, endSec: 72 }] };
-    const zh = renderSignals(withVision, true);
+    const zh = renderSignals(withVision, "zh");
     expect(zh).toContain("视觉模型判定的画面爆点时刻");
     expect(zh).toContain("01:00-01:12");
-    expect(renderSignals(withVision, false)).toContain("Vision-model visual peaks");
+    expect(renderSignals(withVision, "en")).toContain("Vision-model visual peaks");
     // 不带 visualPeaks 时该行不出现(老调用方零感知)
-    expect(renderSignals(signals, true)).not.toContain("视觉模型");
+    expect(renderSignals(signals, "zh")).not.toContain("视觉模型");
+  });
+
+  it("土耳其语信号清单原生渲染(不落回英文,也不留 CJK)", () => {
+    const tr = renderSignals({ ...signals, emotionPeaks: [{ startSec: 30, endSec: 42 }] }, "tr");
+    expect(tr).toContain("Görüntü ve ses sinyalleri");
+    expect(tr).toContain("Yüz ifadesi zirveleri");
+    expect(tr).toContain("03:12-03:18");
+    expect(tr).not.toContain("Audiovisual signals");
+    expect(tr).not.toMatch(/[一-鿿]/);
   });
 
   it("buildHighlightPrompt embeds the signal section when provided", () => {

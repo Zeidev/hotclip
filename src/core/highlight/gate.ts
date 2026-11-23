@@ -13,6 +13,7 @@
 import type { Transcript } from "../transcribe/types";
 import type { HighlightCandidate } from "../../shared/api-types";
 import { clipDurationSec } from "../../shared/pieces";
+import type { PromptLang } from "./prompt";
 
 /** 质量门档位:建议发 / 需人审 / 不建议发。 */
 export type GateTier = "publish" | "review" | "drop";
@@ -97,23 +98,41 @@ export function speakerTangled(
   return switches / durMin > SPEAKER_TANGLE_PER_MIN;
 }
 
-/** 单条候选的规则层检查结果(zh 决定给用户看的原因文案语言)。 */
+/** 单条候选的规则层检查结果(lang 决定给用户看的原因文案语言)。 */
 export function ruleGateIssues(
   transcript: Transcript,
   candidate: HighlightCandidate,
-  zh: boolean
+  lang: PromptLang
 ): string[] {
   // 信号候选(跳舞/萌宠等)不是按原话切的,文本规则对它没有意义
   if (candidate.boundary === "signal") return [];
   const issues: string[] = [];
   if (openingDangles(candidate.text)) {
-    issues.push(zh ? "开头像半截话(悬空接续词)" : "opens mid-thought (dangling connective)");
+    issues.push(
+      lang === "zh"
+        ? "开头像半截话(悬空接续词)"
+        : lang === "tr"
+          ? "açılış cümle ortasından başlıyor (havada kalan bağlaç)"
+          : "opens mid-thought (dangling connective)"
+    );
   }
   if (endingUnfinished(candidate.text)) {
-    issues.push(zh ? "结尾没收住(截在逗号上)" : "ends unfinished (cut on a comma)");
+    issues.push(
+      lang === "zh"
+        ? "结尾没收住(截在逗号上)"
+        : lang === "tr"
+          ? "sonu oturmuyor (virgülde kesilmiş)"
+          : "ends unfinished (cut on a comma)"
+    );
   }
   if (speakerTangled(transcript, candidate)) {
-    issues.push(zh ? "多人抢话密集,单独看可能听不懂" : "dense speaker overlap, may not stand alone");
+    issues.push(
+      lang === "zh"
+        ? "多人抢话密集,单独看可能听不懂"
+        : lang === "tr"
+          ? "yoğun söz kesişmesi, tek başına anlaşılmayabilir"
+          : "dense speaker overlap, may not stand alone"
+    );
   }
   return issues;
 }
@@ -127,10 +146,10 @@ export function ruleGateIssues(
 export function applyRuleGate(
   transcript: Transcript,
   candidates: HighlightCandidate[],
-  zh: boolean
+  lang: PromptLang
 ): HighlightCandidate[] {
   return candidates.map((c) => {
-    const issues = ruleGateIssues(transcript, c, zh);
+    const issues = ruleGateIssues(transcript, c, lang);
     if (issues.length === 0) return c;
     const demote = c.gate === "publish" || c.gate === undefined;
     return {

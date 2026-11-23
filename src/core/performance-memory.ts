@@ -7,6 +7,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "fs/promises";
 import { basename, dirname, extname, join } from "path";
 import type { PerformanceEntry, PerformanceImportResult, PerformanceSummary } from "../shared/api-types";
 import { correlatePerformanceEntries, type CorrelatedPerformance } from "./publish-ledger";
+import type { PromptLang } from "./highlight/prompt";
 
 export type { PerformanceEntry, PerformanceImportResult, PerformanceSummary };
 
@@ -238,31 +239,37 @@ const compactMetric = (n: number, zh: boolean): string => {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n);
 };
 
-const exampleLine = (e: PerformanceEntry, zh: boolean): string => {
+const exampleLine = (e: PerformanceEntry, lang: PromptLang): string => {
+  const zh = lang === "zh";
   const engagement = e.likes + e.comments + e.shares + e.saves;
   const rate = ((engagement / Math.max(1, e.views)) * 100).toFixed(2);
   const extra = [
-    e.hook ? (zh ? `钩子「${e.hook}」` : `hook "${e.hook}"`) : "",
+    e.hook ? (zh ? `钩子「${e.hook}」` : lang === "tr" ? `kanca "${e.hook}"` : `hook "${e.hook}"`) : "",
     e.durationSec ? `${Math.round(e.durationSec)}s` : "",
     e.keywords?.slice(0, 4).join(zh ? "、" : ", ") ?? "",
   ]
     .filter(Boolean).join(zh ? "," : ", ");
-  return zh
-    ? `- [${e.platform}]《${e.title}》播放 ${compactMetric(e.views, true)},总互动率 ${rate}%${extra ? `,${extra}` : ""}`
-    : `- [${e.platform}] "${e.title}" ${compactMetric(e.views, false)} views, ${rate}% total engagement${extra ? `, ${extra}` : ""}`;
+  if (zh) return `- [${e.platform}]《${e.title}》播放 ${compactMetric(e.views, true)},总互动率 ${rate}%${extra ? `,${extra}` : ""}`;
+  if (lang === "tr") return `- [${e.platform}] "${e.title}" ${compactMetric(e.views, false)} görüntüleme, toplam etkileşim %${rate}${extra ? `, ${extra}` : ""}`;
+  return `- [${e.platform}] "${e.title}" ${compactMetric(e.views, false)} views, ${rate}% total engagement${extra ? `, ${extra}` : ""}`;
 };
 
 /** 只把聚合后的有限样例送给 LLM,不携带账号 cookie/目录等敏感信息。 */
-export function performanceMemorySection(entries: PerformanceEntry[], zh: boolean): string {
+export function performanceMemorySection(entries: PerformanceEntry[], lang: PromptLang): string {
   const { winners, laggards } = performanceExamples(entries);
   if (winners.length === 0) return "";
-  if (zh) {
-    let out = `\n\n【真实发布表现】(来自用户本机导入的平台数据。请总结题材/钩子/时长的共性,把它当趋势证据而非硬规则;不要照抄历史标题。)\n高表现样例(同类优先):\n${winners.map((e) => exampleLine(e, true)).join("\n")}`;
-    if (laggards.length > 0) out += `\n低表现样例(同类谨慎):\n${laggards.map((e) => exampleLine(e, true)).join("\n")}`;
+  if (lang === "zh") {
+    let out = `\n\n【真实发布表现】(来自用户本机导入的平台数据。请总结题材/钩子/时长的共性,把它当趋势证据而非硬规则;不要照抄历史标题。)\n高表现样例(同类优先):\n${winners.map((e) => exampleLine(e, lang)).join("\n")}`;
+    if (laggards.length > 0) out += `\n低表现样例(同类谨慎):\n${laggards.map((e) => exampleLine(e, lang)).join("\n")}`;
     return out;
   }
-  let out = `\n\n[Real post performance] (locally imported platform data. Generalize topic/hook/duration patterns as trend evidence, not hard rules; never copy old titles.)\nHigh performers (prefer similar):\n${winners.map((e) => exampleLine(e, false)).join("\n")}`;
-  if (laggards.length > 0) out += `\nLow performers (be cautious with similar):\n${laggards.map((e) => exampleLine(e, false)).join("\n")}`;
+  if (lang === "tr") {
+    let out = `\n\n[Gerçek yayın performansı] (kullanıcının bu bilgisayara aktardığı platform verisi. Konu/kanca/süre ortak yönlerini trend kanıtı olarak çıkar, katı kural olarak değil; eski başlıkları kopyalama.)\nYüksek performanslı örnekler (benzerlerini öne al):\n${winners.map((e) => exampleLine(e, lang)).join("\n")}`;
+    if (laggards.length > 0) out += `\nDüşük performanslı örnekler (benzerlerinde dikkatli ol):\n${laggards.map((e) => exampleLine(e, lang)).join("\n")}`;
+    return out;
+  }
+  let out = `\n\n[Real post performance] (locally imported platform data. Generalize topic/hook/duration patterns as trend evidence, not hard rules; never copy old titles.)\nHigh performers (prefer similar):\n${winners.map((e) => exampleLine(e, lang)).join("\n")}`;
+  if (laggards.length > 0) out += `\nLow performers (be cautious with similar):\n${laggards.map((e) => exampleLine(e, lang)).join("\n")}`;
   return out;
 }
 
@@ -271,8 +278,8 @@ export function performanceReport(entries: PerformanceEntry[], zh = true): strin
   const { winners, laggards } = performanceExamples(entries);
   const platforms = [...new Set(entries.map((e) => e.platform))].join(", ");
   const lines = zh
-    ? [`已学习 ${entries.length} 条发布记录 · 平台: ${platforms}`, "", "高表现:", ...winners.map((e) => exampleLine(e, true))]
-    : [`Learned from ${entries.length} posts · Platforms: ${platforms}`, "", "High performers:", ...winners.map((e) => exampleLine(e, false))];
-  if (laggards.length > 0) lines.push("", zh ? "低表现:" : "Low performers:", ...laggards.map((e) => exampleLine(e, zh)));
+    ? [`已学习 ${entries.length} 条发布记录 · 平台: ${platforms}`, "", "高表现:", ...winners.map((e) => exampleLine(e, "zh"))]
+    : [`Learned from ${entries.length} posts · Platforms: ${platforms}`, "", "High performers:", ...winners.map((e) => exampleLine(e, "en"))];
+  if (laggards.length > 0) lines.push("", zh ? "低表现:" : "Low performers:", ...laggards.map((e) => exampleLine(e, zh ? "zh" : "en")));
   return lines.join("\n");
 }

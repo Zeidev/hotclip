@@ -77,7 +77,7 @@ describe("speakerTangled(多人抢话)", () => {
 
 describe("ruleGateIssues / applyRuleGate", () => {
   it("信号候选跳过文本规则(它不是按原话切的)", () => {
-    expect(ruleGateIssues(EMPTY_TX, cand({ boundary: "signal", text: "但是," }), true)).toEqual([]);
+    expect(ruleGateIssues(EMPTY_TX, cand({ boundary: "signal", text: "但是," }), "zh")).toEqual([]);
   });
 
   it("publish/缺省降为 review 并写明原因;review 原因追加;drop 不动档", () => {
@@ -87,7 +87,7 @@ describe("ruleGateIssues / applyRuleGate", () => {
       cand({ id: 2, text: bad }), // 复评没跑,gate 缺省
       cand({ id: 3, text: bad, gate: "drop", gateNotes: ["凑数"] }),
       cand({ id: 4, text: "完整的一句话。", gate: "publish" }),
-    ], true);
+    ], "zh");
     expect(out[0].gate).toBe("review");
     expect(out[0].gateNotes).toEqual(["开头像半截话(悬空接续词)", "结尾没收住(截在逗号上)"]);
     expect(out[1].gate).toBe("review");
@@ -98,7 +98,13 @@ describe("ruleGateIssues / applyRuleGate", () => {
   });
 
   it("规则降档不改变 recommended(选中状态只跟 LLM 复评走)", () => {
-    const out = applyRuleGate(EMPTY_TX, [cand({ text: "但是这样,", gate: "publish", recommended: true })], true);
+    const out = applyRuleGate(EMPTY_TX, [cand({ text: "但是这样,", gate: "publish", recommended: true })], "zh");
     expect(out[0].recommended).toBe(true);
+  });
+
+  it("土耳其语给出原生降档原因(不给英文、不留 CJK)", () => {
+    const issues = ruleGateIssues(EMPTY_TX, cand({ text: "但是这样," }), "tr");
+    expect(issues[0]).toContain("açılış cümle ortasından başlıyor");
+    expect(issues.join(" ")).not.toMatch(/[一-鿿]/);
   });
 });

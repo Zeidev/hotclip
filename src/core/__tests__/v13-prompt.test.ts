@@ -26,24 +26,24 @@ function makeTranscript(sentences: string[]): Transcript {
 
 describe("briefSection(用户点题)", () => {
   it("focus/exclude 都注入,且声明优先级与不硬凑", () => {
-    const s = briefSection({ focus: "重点找售后翻车", exclude: "不要抽奖和念弹幕" }, true);
+    const s = briefSection({ focus: "重点找售后翻车", exclude: "不要抽奖和念弹幕" }, "zh");
     expect(s).toContain("重点找:重点找售后翻车");
     expect(s).toContain("明确排除:不要抽奖和念弹幕");
     expect(s).toContain("不许硬凑".replace("不许硬凑", "绝不硬凑"));
   });
   it("单填一项也成段;都空返回空串", () => {
-    expect(briefSection({ focus: "只要讲创业的" }, true)).toContain("重点找");
-    expect(briefSection({ focus: "只要讲创业的" }, true)).not.toContain("明确排除");
-    expect(briefSection({}, true)).toBe("");
-    expect(briefSection(undefined, true)).toBe("");
-    expect(briefSection({ focus: "  " }, true)).toBe("");
+    expect(briefSection({ focus: "只要讲创业的" }, "zh")).toContain("重点找");
+    expect(briefSection({ focus: "只要讲创业的" }, "zh")).not.toContain("明确排除");
+    expect(briefSection({}, "zh")).toBe("");
+    expect(briefSection(undefined, "zh")).toBe("");
+    expect(briefSection({ focus: "  " }, "zh")).toBe("");
   });
   it("超长点题截断", () => {
-    const s = briefSection({ focus: "长".repeat(BRIEF_MAX_CHARS * 2) }, true);
+    const s = briefSection({ focus: "长".repeat(BRIEF_MAX_CHARS * 2) }, "zh");
     expect(s.length).toBeLessThan(BRIEF_MAX_CHARS + 200);
   });
   it("英文版走英文文案", () => {
-    const s = briefSection({ exclude: "giveaways" }, false);
+    const s = briefSection({ exclude: "giveaways" }, "en");
     expect(s).toContain("Explicitly exclude: giveaways");
   });
   it("highlightSystemPrompt 尾部挂上点题段", () => {
@@ -56,7 +56,7 @@ describe("briefSection(用户点题)", () => {
 
 describe("renderSignals:主播口令与画面时刻线", () => {
   it("口令时刻渲染成最高证据并写明滞后语义(内容在口令之前)", () => {
-    const s = renderSignals({ loudPeaks: [], cutDense: [], clipCommandMarks: [754, 1810] }, true);
+    const s = renderSignals({ loudPeaks: [], cutDense: [], clipCommandMarks: [754, 1810] }, "zh");
     expect(s).toContain("主播剪辑口令时刻");
     expect(s).toContain("12:34");
     expect(s).toContain("30:10");
@@ -65,13 +65,13 @@ describe("renderSignals:主播口令与画面时刻线", () => {
   it("画面时刻线带时间戳与描述", () => {
     const s = renderSignals(
       { loudPeaks: [], cutDense: [], visualNotes: [{ t: 65, energy: 9, note: "主播摔了产品" }] },
-      true
+      "zh"
     );
     expect(s).toContain("全场画面时刻线");
     expect(s).toContain("01:05 主播摔了产品(9/10)");
   });
   it("没有新信号时不渲染对应行", () => {
-    const s = renderSignals({ loudPeaks: [{ startSec: 1, endSec: 3 }], cutDense: [] }, true);
+    const s = renderSignals({ loudPeaks: [{ startSec: 1, endSec: 3 }], cutDense: [] }, "zh");
     expect(s).not.toContain("口令");
     expect(s).not.toContain("画面时刻线");
   });
@@ -79,13 +79,13 @@ describe("renderSignals:主播口令与画面时刻线", () => {
 
 describe("带货三段式(痛点→演示→价格)", () => {
   it("productSection 给出三段式拼接指引且不许硬拼", () => {
-    const s = productSection(["纸巾"], true);
+    const s = productSection(["纸巾"], "zh");
     expect(s).toContain("痛点→演示→价格");
     expect(s).toContain("parts");
     expect(s).toContain("不硬拼");
   });
   it("英文版同款", () => {
-    const s = productSection(["tissue"], false);
+    const s = productSection(["tissue"], "en");
     expect(s).toContain("pain point → demo → price");
   });
   it("shopping 品类判据也带三段式(没填商品词时也生效)", () => {
