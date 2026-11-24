@@ -162,6 +162,28 @@ export interface TranscribeProgressEvent {
   resumedWindows?: number;
 }
 
+/**
+ * Coarse progress of a highlight-detection run. The stage is a label for the user,
+ * not a fraction: several stages (signals/chat/vision/voice) run in parallel and may
+ * report out of order, so the UI shows the latest one rather than a progress bar.
+ */
+export type DetectStage =
+  | "starting"
+  | "reference"
+  | "signals"
+  | "speakers"
+  | "chat"
+  | "vision"
+  | "voice"
+  | "prefilter"
+  | "select"
+  | "review"
+  | "reviewVision";
+
+export interface DetectStageEvent {
+  stage: DetectStage;
+}
+
 export interface SpeechRunOptions {
   localServiceUrl?: string;
   restart?: boolean;
@@ -953,6 +975,8 @@ export interface HotClipApi {
     /** 提示词语言覆盖(auto/zh/tr/en,默认 auto);导入字幕没有引擎语言时用它兜底。 */
     promptLang?: PromptLangChoice
   ) => Promise<DetectHighlightsResult>;
+  /** Subscribe to highlight-detection stage changes; returns an unsubscribe function. */
+  onDetectStage: (cb: (p: DetectStageEvent) => void) => () => void;
   /** Cut the selected highlights into mp4 files; resolves with the file list. */
   exportClips: (filePath: string, clips: HighlightCandidate[], options?: ExportOptions) => Promise<ExportedClip[]>;
   /** Subscribe to per-clip export progress; returns an unsubscribe function. */

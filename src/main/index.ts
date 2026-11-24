@@ -93,7 +93,7 @@ import { wordsInPieces } from "../shared/pieces";
 import { snapContextAround } from "@core/shots";
 import { renderCaptionOverlay } from "./overlay-renderer";
 import { QUALITY_CRF } from "../shared/api-types";
-import type { Transcript, TranscriptWord, LlmConfig, HighlightCandidate, ExportOptions, VisionStats, EmotionStats, DanmakuStats, VoiceTagStats, WatchEvent, UpdateInfo, AutomationTask, AutomationTaskStage, WhisperCppStatus } from "../shared/api-types";
+import type { Transcript, TranscriptWord, LlmConfig, HighlightCandidate, ExportOptions, VisionStats, EmotionStats, DanmakuStats, VoiceTagStats, WatchEvent, UpdateInfo, AutomationTask, AutomationTaskStage, WhisperCppStatus, DetectStage } from "../shared/api-types";
 
 const VIDEO_EXTENSIONS = ["mp4", "mkv", "mov", "flv", "ts", "webm", "avi", "m4v"];
 const AUDIO_EXTENSIONS = ["mp3", "m4a", "wav", "aac", "flac"];
@@ -845,17 +845,23 @@ ipcMain.handle("hotclip:transcribe", async (event, filePath: unknown, engineId: 
 
 ipcMain.handle(
   "hotclip:detect-highlights",
-  async (_event, transcript: unknown, llm: unknown, filePath: unknown, diarize: unknown, prefilter: unknown, vision: unknown, length: unknown, products: unknown, referencePath: unknown, genre: unknown, brief: unknown, scan: unknown, maxClips: unknown, promptLang: unknown) => {
+  async (event, transcript: unknown, llm: unknown, filePath: unknown, diarize: unknown, prefilter: unknown, vision: unknown, length: unknown, products: unknown, referencePath: unknown, genre: unknown, brief: unknown, scan: unknown, maxClips: unknown, promptLang: unknown) => {
     let t = transcript as Transcript;
     const config = llm as LlmConfig;
     if (!t || !Array.isArray(t.segments)) throw new Error("detect-highlights requires a transcript");
     if (!config?.baseUrl || !config?.model) throw new Error("请先在设置里配置 LLM(baseUrl/model) / configure the LLM (Base URL + model) in Settings first");
+    // 阶段上报(粗粒度,只给用户看个「卡在哪一步」):不改变任何检测行为,
+    // 发不出去(窗口已关)就静默丢弃。
+    const stage = (s: DetectStage): void => {
+      if (!event.sender.isDestroyed()) event.sender.send("hotclip:detect-stage", { stage: s });
+    };
     // 参考爆款画像(可选):用户显式给的输入,分析失败按无参考继续,
     // 但失败原因必须随结果带回给 UI——不静默丢
     let reference: ReferenceProfile | undefined;
     let referenceError: string | undefined;
     if (typeof referencePath === "string" && referencePath.trim()) {
       try {
+        stage("reference");
         reference = await analyzeReferenceVideo(referencePath, {
           modelsRoot: modelsRoot(),
           cacheDir: transcriptCacheDir(),
@@ -870,6 +876,7 @@ ipcMain.handle(
     // pathological source can never stall detection; failures degrade to none.
     let signals;
     if (typeof filePath === "string" && filePath.trim()) {
+      stage("signals");
       // usually already resolved (warmed during transcription); cap the cold path
       signals = await Promise.race([
         warmSignals(filePath),
@@ -880,6 +887,7 @@ ipcMain.handle(
     // who says what. Fail-open — a diarization hiccup must not block detection.
     let labeled: Transcript | undefined;
     if (diarize === true && typeof filePath === "string" && filePath.trim()) {
+      stage("speakers");
       t = await diarizeTranscript(t, filePath).catch(() => t);
       labeled = t; // surface the labeled transcript so export can color captions by speaker
     }
@@ -904,6 +912,7 @@ ipcMain.handle(
       const media = await probeMedia(filePath).catch(() => null);
       // 弹幕热度(零配置):视频旁同名 .xml(录播姬约定)自动发现,纯音频也适用
       if (media && media.durationSec > 1) {
+        stage("chat");
         const dm = await collectDanmakuSignal(filePath, media.durationSec);
         if (dm) {
           signals = { loudPeaks: [], cutDense: [], ...signals, danmakuPeaks: dm.danmakuPeaks };
@@ -929,6 +938,7 @@ ipcMain.handle(
             ? { baseUrl: vc.baseUrl, model: vc.model, apiKey: typeof vc.apiKey === "string" && vc.apiKey.trim() ? vc.apiKey : undefined }
             : null;
         reviewVisionCfg = visionCfg;
+        stage("vision");
         const [emotionOutcome, visionOutcome] = await Promise.all([
           Promise.race([
             collectEmotionSignal({
@@ -976,6 +986,7 @@ ipcMain.handle(
           emotionStats = emotionOutcome?.stats;
         }
       }
+      stage("voice");
       const voiceOutcome = await voicePending;
       if (voiceOutcome && (voiceOutcome.voiceEmotionPeaks.length > 0 || voiceOutcome.audioEventPeaks.length > 0)) {
         signals = {
@@ -1015,11 +1026,12 @@ ipcMain.handle(
             exclude: typeof b.exclude === "string" ? b.exclude.trim() : undefined,
           }
         : undefined;
-    const outcome = await detectHighlights(t, config, undefined, signals, localFilter, clipLength, productWords, reference, reviewMemory, genreArg, briefArg, performanceMemory, normalizeMaxClips(maxClips), normalizePromptLang(promptLang));
+    const outcome = await detectHighlights(t, config, undefined, signals, localFilter, clipLength, productWords, reference, reviewMemory, genreArg, briefArg, performanceMemory, normalizeMaxClips(maxClips), normalizePromptLang(promptLang), stage);
     // 候选段画面复核(v0.12):每条候选一张接触表让 VL 看画面,画面分回流
     // 排序、看点进 reason。fail-open:失败/超时沿用原候选。
     let candidates = outcome.candidates;
     if (reviewVisionCfg && candidates.length > 0 && typeof filePath === "string") {
+      stage("reviewVision");
       const reviewed = await reviewCandidatesVision({
         videoPath: filePath,
         candidates,

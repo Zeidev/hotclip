@@ -34,7 +34,7 @@ import {
   LuUpload,
 } from "react-icons/lu";
 import { useT, useLocaleStore } from "../i18n/store";
-import { LOCALE_LIST, REGISTRY } from "../i18n/messages";
+import { LOCALE_LIST, REGISTRY, reportLocale, intlLocale } from "../i18n/messages";
 import { getApi, isElectron } from "../api/provider";
 import { useLlmStore, LLM_PRESET_LIST, LLM_PRESETS, presetForBaseUrl } from "../stores/llm-store";
 import { useAsrStore } from "../stores/asr-store";
@@ -79,7 +79,7 @@ function formatBytes(bytes: number): string {
 }
 
 function formatMetric(value: number, locale: string): string {
-  return new Intl.NumberFormat(locale === "zh" ? "zh-CN" : "en-US", {
+  return new Intl.NumberFormat(intlLocale(locale), {
     notation: value >= 10_000 ? "compact" : "standard",
     maximumFractionDigits: 1,
   }).format(value);
@@ -1046,7 +1046,7 @@ function DiagnosticsSection(): React.JSX.Element {
     setConfirmClearCache(false);
     setConfirmClearEvidence(false);
     try {
-      setReport(await getApi().diagnosticsRun(config.baseUrl && config.model ? config : null, locale));
+      setReport(await getApi().diagnosticsRun(config.baseUrl && config.model ? config : null, reportLocale(locale)));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1065,7 +1065,7 @@ function DiagnosticsSection(): React.JSX.Element {
     setError("");
     setNotice("");
     try {
-      setReport(await getApi().diagnosticsClearRenderCache(config.baseUrl && config.model ? config : null, locale));
+      setReport(await getApi().diagnosticsClearRenderCache(config.baseUrl && config.model ? config : null, reportLocale(locale)));
       setNotice(t("clearCacheSuccess"));
       setConfirmClearCache(false);
     } catch (e) {
@@ -1086,7 +1086,7 @@ function DiagnosticsSection(): React.JSX.Element {
     setError("");
     setNotice("");
     try {
-      setReport(await getApi().diagnosticsClearEvidenceIndex(config.baseUrl && config.model ? config : null, locale));
+      setReport(await getApi().diagnosticsClearEvidenceIndex(config.baseUrl && config.model ? config : null, reportLocale(locale)));
       setNotice(t("clearEvidenceSuccess"));
       setConfirmClearEvidence(false);
     } catch (e) {
@@ -1104,7 +1104,7 @@ function DiagnosticsSection(): React.JSX.Element {
     setConfirmClearCache(false);
     setConfirmClearEvidence(false);
     try {
-      setReport(await getApi().diagnosticsPrepareModels(config.baseUrl && config.model ? config : null, locale));
+      setReport(await getApi().diagnosticsPrepareModels(config.baseUrl && config.model ? config : null, reportLocale(locale)));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       if (!/abort/i.test(message)) setError(message);

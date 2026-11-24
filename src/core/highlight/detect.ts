@@ -14,6 +14,7 @@ import type {
   FunnelStats,
   ClipLength,
   PromptLangChoice,
+  DetectStage,
 } from "../../shared/api-types";
 import {
   highlightSystemPrompt,
@@ -708,7 +709,12 @@ export async function detectHighlights(
   performanceMemory?: PerformanceEntry[],
   maxClips?: number,
   /** 提示词语言覆盖(auto/zh/tr/en);导入字幕没有引擎语言时靠它兜底。 */
-  promptLang?: PromptLangChoice
+  promptLang?: PromptLangChoice,
+  /**
+   * 粗粒度阶段回调(桌面进度提示用)。只报这个函数自己能看见的三步:预筛、
+   * 逐句挑段、盲评复核;参考片/信号/转写这些发生在本函数之外或在其它模块。
+   */
+  onStage?: (stage: DetectStage) => void
 ): Promise<DetectOutcome> {
   if (transcript.segments.length === 0) return { candidates: [] };
   // 语言一次判定,贯穿提示词、规则门与加分理由(zh/tr/en,tr 不再借 en 文案)
@@ -728,6 +734,7 @@ export async function detectHighlights(
   let promptTranscript = transcript;
   let funnel: FunnelStats | undefined;
   if (prefilter?.baseUrl && prefilter.model) {
+    onStage?.("prefilter");
     const local: LlmConfig = { baseUrl: prefilter.baseUrl, apiKey: "ollama", model: prefilter.model };
     const outcome = await prefilterTranscript(transcript, local, chatComplete, signal).catch((e) => {
       // 上游主动取消要中断整个检测;其余错误回退全文
@@ -748,6 +755,7 @@ export async function detectHighlights(
   const system = highlightSystemPrompt(promptTranscript, length, products ?? [], reference, reviewMemory, genre, brief, performanceMemory, lang);
   const plan = planStage1(promptTranscript.segments, limit);
   const multi = plan.windows.length > 1;
+  onStage?.("select");
   const passes = await runPool(
     plan.windows.map((windowSegments, i) => () =>
       chatCompleteJson(
@@ -859,6 +867,7 @@ export async function detectHighlights(
       { length: Math.ceil(reviewable.length / REVIEW_BATCH) },
       (_, i) => reviewable.slice(i * REVIEW_BATCH, (i + 1) * REVIEW_BATCH)
     );
+    onStage?.("review");
     const settled = await runPool(
       batches.map((batch) => () =>
         chatCompleteJson(llm, reviewSystemPrompt(transcript, lang), buildReviewPrompt(transcript, batch, lang), parseReviews, signal)
