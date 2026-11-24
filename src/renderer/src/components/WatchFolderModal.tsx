@@ -13,7 +13,7 @@ import { useRenderPrefs } from "../stores/render-prefs-store";
 import type { AutomationTask, WatchEvent } from "../../../shared/api-types";
 import { ModalShell } from "./ui";
 import { DetectionLimits } from "./DetectionLimits";
-import { GENRE_PRESETS, GENRE_CUSTOM_MAX_CHARS, normalizeGenreId } from "../../../core/genre";
+import { GENRE_PRESETS, GENRE_CUSTOM_MAX_CHARS, genreLabel, normalizeGenreId } from "../../../core/genre";
 import { detectionOptionsFromPrefs } from "../../../shared/detection-options";
 import { useSession } from "../stores/session-store";
 
@@ -208,7 +208,7 @@ export function WatchFolderModal({ onClose }: { onClose: () => void }): React.JS
             <select aria-label={tw("paramGenre")} disabled={running} value={normalizeGenreId(prefs.genreId)}
               onChange={(e) => changeSelection({ genreId: e.target.value })}
               className="min-w-0 rounded-lg border border-line bg-panel-2 px-2 py-1.5 disabled:opacity-50">
-              {GENRE_PRESETS.map((g) => <option key={g.id} value={g.id}>{locale === "zh" ? g.labelZh : g.labelEn}</option>)}
+              {GENRE_PRESETS.map((g) => <option key={g.id} value={g.id}>{genreLabel(g, locale)}</option>)}
             </select>
           </label>
           {(prefs.genreId === "custom" || prefs.genreCustom.trim()) && <textarea

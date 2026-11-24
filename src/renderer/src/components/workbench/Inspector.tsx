@@ -23,7 +23,7 @@ import { useT, useLocaleStore } from "../../i18n/store";
 import { getApi } from "../../api/provider";
 import { useSession } from "../../stores/session-store";
 import { useRenderPrefs } from "../../stores/render-prefs-store";
-import { GENRE_PRESETS, GENRE_CUSTOM_MAX_CHARS } from "../../../../core/genre";
+import { GENRE_PRESETS, GENRE_CUSTOM_MAX_CHARS, genreLabel } from "../../../../core/genre";
 import { adjustCandidateBoundary } from "../../../../shared/boundary";
 import { clipDurationSec, isStitched } from "../../../../shared/pieces";
 import { summarizeTimingQuality, wordsForClip } from "../../../../shared/transcript-quality";
@@ -352,7 +352,7 @@ function ParamsTab({ onRedetect }: { onRedetect: () => void }): React.JSX.Elemen
         >
           {GENRE_PRESETS.map((g) => (
             <option key={g.id} value={g.id}>
-              {lang === "zh" ? g.labelZh : g.labelEn}
+              {genreLabel(g, lang)}
             </option>
           ))}
         </select>

@@ -58,6 +58,34 @@ describe("isClipCommand", () => {
       expect(isClipCommand(s), s).toBe(false);
     }
   });
+
+  it("命中土耳其语口令", () => {
+    for (const s of [
+      "burayı kliple",
+      "şunu klip yap",
+      "şurayı klip yapalım",
+      "bunu kliple lütfen",
+      "hadi burayı klip al",
+      "bu kısmı klip çıkar",
+      "şunu kes bunu kaydet", // 指代 + 祈使
+      "burasını klipleyebilir misin",
+    ]) {
+      expect(isClipCommand(s), s).toBe(true);
+    }
+  });
+
+  it("土耳其语日常语不误伤", () => {
+    for (const s of [
+      "bu klip çok iyi olmuş", // 名词用法
+      "klipleri düzenledim",
+      "bu kısmı anlamadım", // 指代没有剪辑动作
+      "şunu bir daha söyle",
+      "biraz sonra devam ederiz",
+      "şu bölümde ne oldu",
+    ]) {
+      expect(isClipCommand(s), s).toBe(false);
+    }
+  });
 });
 
 describe("detectClipCommands", () => {

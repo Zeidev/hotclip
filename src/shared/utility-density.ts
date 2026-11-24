@@ -10,12 +10,20 @@
  * 不推翻爆点排序(信息密度是加分项不是替代项)。纯函数,无 Node 依赖。
  */
 
-/** 步骤/顺序引导词(中英)。 */
-const STEP_RE = /第[一二三四五六七八九十\d]+步|首先|其次|然后|接下来|接着|最后一步|step\s*\d|first,|second,|finally/gi;
-/** 清单/盘点结构(「三个方法」「5 个坑」)。 */
-const LIST_RE = /[一二三四五六七八九十\d]+\s*(?:个|种|条|点|大|招)\s*(?:方法|技巧|误区|坑|建议|习惯|细节|步骤|原则|信号|问题|tips?)/gi;
-/** 方法论/干货词。 */
-const METHOD_RE = /方法|技巧|公式|口诀|配方|做法|教程|攻略|避坑|误区|秘诀|清单|checklist|recipe|formula|how to/gi;
+/**
+ * 步骤/顺序引导词(中英土)。土耳其语只用完整词组:「ilk adım」「ardından」
+ * 这类;裸「adım」不收——它同时是「adım(我的名字)」,单独收会扫到日常口语
+ * (与中文不收裸「然后」同理)。句首的 İ 要显式写进字符组:JS 的 /i 不做
+ * İ(U+0130)→i 折叠,只写 ilk 时「İlk olarak」会漏掉。
+ */
+const STEP_RE = /第[一二三四五六七八九十\d]+步|首先|其次|然后|接下来|接着|最后一步|step\s*\d|first,|second,|finally|[İi]lk olarak|[İi]lk adım|[İi]kinci adım|son adım|son olarak|sonraki adım|ardından|daha sonra/gi;
+/** 清单/盘点结构(「三个方法」「5 个坑」= 「3 yöntem」「üç ipucu」)。 */
+const LIST_RE = /(?:[一二三四五六七八九十\d]+|bir|iki|üç|dört|beş)\s*(?:个|种|条|点|大|招)\s*(?:方法|技巧|误区|坑|建议|习惯|细节|步骤|原则|信号|问题|tips?)|(?:[0-9]+|bir|iki|üç|dört|beş)\s+(?:yöntem|ipucu|adım|hata|madde|kural|sebep|işaret|tavsiye|alışkanlık|püf noktası)/gi;
+/**
+ * 方法论/干货词。土耳其语不收裸「yol」(它在 yolcu/yolculuk/yollar 里都会命中),
+ * 只收 yöntem/taktik/rehber 这类独立成词的。
+ */
+const METHOD_RE = /方法|技巧|公式|口诀|配方|做法|教程|攻略|避坑|误区|秘诀|清单|checklist|recipe|formula|how to|yöntem|taktik|teknik|formül|püf noktası|ipucu|nasıl yapılır|rehber|kılavuz/gi;
 /** 具体数字(价格/比例/参数——≥2 位才算,单个数字噪声太大)。 */
 const NUMBER_RE = /\d{2,}[%％折万亿元块]?|\d+\.\d+/g;
 

@@ -72,6 +72,52 @@ const LINT_RULES: LintRuleSet[] = [
     category: "迷信博彩",
     re: /开光|转运|辟邪|消灾|改运|招财转运|稳赢|包中奖?|内部渠道|内幕消息|必中/g,
   },
+  // ── 土耳其语规则组 ────────────────────────────────────────────────────────
+  // 依据:Ticari Reklam ve Haksız Ticari Uygulamalar Yönetmeliği(绝对化用语、
+  // 疗效宣称、虚构紧迫感)+ RTÜK 对健康/美容类宣称的限制。中文规则用的是 CJK
+  // 正则,扫不到土耳其语文本,反之亦然,两组互不干扰。类别名写成土耳其语:
+  // 告警是给土耳其语创作者看的,他把文案改成土耳其语发布,风险类别也得认得出。
+  // (外层告警句式 formatLintIssue 仍是中文——那是另一处本地化,不在本次范围。)
+  {
+    // Yönetmelik 的 "en üstünlük iddiası":不能自称最好/最便宜/唯一
+    category: "En üstünlük iddiası",
+    re: /en iyi|en ucuz|en kaliteli|en h[ıi]zl[ıi]|en güvenilir|en etkili|dünyan[ıi]n en|türkiye'nin en|rakipsiz|eşsiz|benzersiz|1 numara|bir numara|lider marka|kusursuz|mükemmel sonuç|%100 doğal|%100 etkili|%100 garanti|yüzde yüz doğal|yüzde yüz etkili|yüzde yüz garanti/g,
+  },
+  {
+    // 健康/疗效宣称:tıbbi beyan,各平台与 RTÜK 的硬红线
+    category: "Sağlık beyanı",
+    re: /tedavi eder|tedavi edici|iyileştirir|şifa|hastal[ıi][ğg]a iyi gelir|ilaç gibi|doktor onayl[ıi]|uzman onayl[ıi]|klinik olarak kan[ıi]tlanm[ıi][şs]|zay[ıi]flat[ıi]r|kilo verdirir|ba[ğg][ıi][şs][ıi]kl[ıi][ğg][ıi] güçlendirir|ba[ğg][ıi][şs][ıi]kl[ıi]k|detoks|selülit giderir|k[ıi]r[ıi][şs][ıi]k giderir|saç ç[ıi]kar[ıi]r|yan etkisi yok|kansere|kanser/gi,
+  },
+  {
+    // 担保式承诺:可验证的承诺做不到即虚假宣传
+    category: "Garanti vaadi",
+    re: /para iade garantisi|iade garantili|memnun kalmazsan[ıi]z iade|garantili sonuç|garantili çözüm|kesin çözüm|sonuç garantili|kesin sonuç|3 günde|üç günde|bir haftada|1 haftada|7 günde|asla tekrarlamaz|ömür boyu garanti/g,
+  },
+  {
+    // 收益承诺:金融/副业/知识付费类文案的重灾区
+    category: "Kazanç vaadi",
+    re: /garanti kazanç|kesin kazanç|risksiz kazanç|kolay para|para basma|zengin ol|k[ıi]sa sürede zengin|ayl[ıi]k \d+ ?(?:bin|tl|lira)|evden çal[ıi][şs]arak|pasif gelir garantili|finansal özgürlük|günde \d+ ?(?:bin|tl|lira)/gi,
+  },
+  {
+    // 价格/稀缺误导:虚构紧迫感
+    category: "Fiyat/acele bask[ıi]s[ıi]",
+    re: /son gün|son [şs]ans|sadece bugün|sadece bu ak[şs]am|stoklar tükenmeden|stok bitmeden|f[ıi]rsat[ıi] kaç[ıi]rma|kaç[ıi]rma|bir daha bu fiyat|bedavaya|bedava/gi,
+  },
+  {
+    // 站外导流/诱导:平台限流话术
+    category: "Platform d[ıi][şs][ıi] yönlendirme",
+    re: /whatsapp|wp'?den yaz|instagram'?dan yaz|dm at|dm'?den yaz|profilden yaz|linke t[ıi]kla|aç[ıi]klamadaki link|yorumlara yaz|bize ula[şs]|telefon numaram[ıi]z|numaraya yaz/gi,
+  },
+  {
+    // 权威背书:不可证实或已废止的认证
+    category: "Yetkisiz onay iddiası",
+    re: /bakanl[ıi]k onayl[ıi]|devlet onayl[ıi]|sa[ğg]l[ıi]k bakanl[ıi][ğg][ıi] onayl[ıi]|resmi onayl[ıi]|sertifikal[ıi]|laboratuvar onayl[ıi]/gi,
+  },
+  {
+    // 迷信/博彩擦边
+    category: "Bat[ıi]l inanç / [şs]ans oyunu",
+    re: /nazar|büyü|muska|bereket getirir|banko|garanti maç|iddaa tahmin|kazand[ıi]ran kupon|kesin tutar|şans getirir/gi,
+  },
 ];
 
 /** 扫一段文本,返回去重后的命中(同一词多次出现只报一次)。 */

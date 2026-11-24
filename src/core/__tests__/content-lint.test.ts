@@ -44,6 +44,39 @@ describe("lintText (平台违禁词扫描)", () => {
   it("空文本返回空", () => {
     expect(lintText("")).toEqual([]);
   });
+
+  it("土耳其语规则组命中,类别也是土耳其语(创作者认得出)", () => {
+    const hits = lintText("Bu ürün en iyi ve %100 doğal, ayrıca tedavi eder");
+    const terms = hits.map((h) => h.term);
+    expect(terms).toContain("en iyi");
+    expect(terms).toContain("%100 doğal");
+    expect(terms).toContain("tedavi eder");
+    expect(hits.find((h) => h.term === "en iyi")?.category).toBe("En üstünlük iddiası");
+    expect(hits.find((h) => h.term === "tedavi eder")?.category).toBe("Sağlık beyanı");
+  });
+
+  it("土耳其语承诺/紧迫感/导流话术命中", () => {
+    const t = lintText("Garanti kazanç veriyoruz, fırsatı kaçırma, sadece bugün, whatsapp'tan yaz");
+    const terms = t.map((h) => h.term);
+    expect(terms).toContain("Garanti kazanç");
+    expect(terms.some((x) => x.includes("kaçırma"))).toBe(true);
+    expect(terms).toContain("sadece bugün");
+    expect(terms).toContain("whatsapp");
+  });
+
+  it("土耳其语日常口语不误报(两组规则互不干扰)", () => {
+    expect(lintText("Bugün hava çok güzel, biraz yürüyüş yaptım ve eve döndüm")).toEqual([]);
+    expect(lintText("Yeni kameramı deniyorum, görüntü kalitesi bence yeterli")).toEqual([]);
+  });
+
+  it("中文规则不会命中土耳其语文本,反之亦然", () => {
+    // 土耳其语文本里不该出现中文类别
+    const tr = lintText("en iyi fiyat garantisi");
+    expect(tr.length).toBeGreaterThan(0);
+    expect(tr.every((h) => !/[一-鿿]/.test(h.category))).toBe(true);
+    // 对照:中文文本仍走中文规则
+    expect(lintText("全网最低价")[0].category).toBe("绝对化用语");
+  });
 });
 
 describe("lintClipContent (整条切片的物料扫描)", () => {

@@ -20,7 +20,13 @@
  * 两类会额外跑 highlight/moments.ts 的信号通道。
  *
  * 用户可以直接改判据文本(custom),写死的预设只是起点不是终点。纯函数,可单测。
+ *
+ * 语言:判据注入成片该说的语言(zh/tr/en),语言档取自 shared/ui-lang.ts 的
+ * AppLang——与 prompt.ts 的 PromptLang 同形,但不能反过来导入(prompt.ts 已经
+ * 导入本文件,会成环)。土耳其语文本放在下面的表里,理由见表头注释。
  */
+
+import type { AppLang } from "../shared/ui-lang";
 
 /**
  * 预设 id。按平台一级分区归并而来;仍然枚举不完(平台每月都在加二级分区),
@@ -374,6 +380,153 @@ export const GENRE_PRESETS: GenrePreset[] = [
   },
 ];
 
+/**
+ * 各品类的土耳其语显示名(与 labelZh/labelEn 一一对应)。
+ * 平台名照拉丁写(Douyin/Bilibili...),分区口径按内容形态说人话,不照搬中文分区名——
+ * 「虚拟主播」「电台」「电子榨菜」这些词土耳其语观众认不出来。
+ */
+export const GENRE_LABEL_TR: Record<GenreId, string> = {
+  auto: "Genel (tür belirtilmedi)",
+  shopping: "Canlı satış / alışveriş",
+  game: "Oyun (PC / mobil / konsol)",
+  esports: "E-spor / maç anlatımı",
+  vtuber: "VTuber / sanal yayıncı",
+  show: "Performans / dans / şarkı",
+  looks: "Sohbet / tanışma / sosyal",
+  talk: "Sohbet / yorum",
+  radio: "Radyo / yalnızca ses",
+  knowledge: "Bilgi / eğitim / bilim",
+  outdoor: "Dış mekân / gezi / keşif",
+  food: "Yemek / mukbang",
+  pet: "Evcil hayvan",
+  sports: "Spor / fitness",
+  craft: "El işi / çizim / ambiyans",
+  cowatch: "Birlikte izleme / ders çalışma",
+  interview: "Söyleşi / podcast",
+  custom: "Özel",
+};
+
+/**
+ * 各品类的土耳其语判据段(criteriaEn 的土耳其语原生版,不是逐字直译)。
+ * 中文分区名(B站「虚拟主播」这类)在 tr 里一律不出现——英文版已经去掉过一轮,
+ * 土耳其语读者更认不出来。auto/custom 为空,与 zh/en 一致(用通用判据)。
+ */
+export const GENRE_CRITERIA_TR: Record<GenreId, string> = {
+  auto: "",
+  shopping:
+    "Bu yayın canlı satış yayını. Patlama önceliği: (1) ürünün beklenmedik davranıp demonun ters gitmesi (en patlayıcı olan), " +
+    "(2) fiyatın oturduğu an, (3) içerik/iade/özgünlük sorularına verilen yanıtlar, (4) gerçek deneme ve karşılaştırma, " +
+    "(5) alışılmadık satın alma tavsiyesi. " +
+    "Kanıt ağırlığı: söylenene bak; burada ton pek bir şey ifade etmez — bu sunucular baştan sona yüksek seslidir. " +
+    "Bir ürünün sorun cümlesi, canlı demo ve fiyat açıklaması genelde birbirinden uzak düşer — iki üç vuruş varsa " +
+    "parçaları sorun→demo→fiyat sırasıyla birleştirmeyi tercih et (zorlama). " +
+    "Asla seçme: etkileşim için bekletme numaraları, döngüye giren fiyat ezberleri, boş sohbet dolgusu.",
+  game:
+    "Bu yayın oyun yayını (PC / mobil / konsol). Patlama önceliği: (1) kritik hamle ve geri dönüşler, " +
+    "(2) takımın silinmesi, felaket anları, (3) takım arkadaşı ya da rakiplerle sürtüşme, " +
+    "(4) sunucunun en büyük tepkileri ve hazır cevapları, (5) absürt şans. " +
+    "Kanıt ağırlığı: **yalnızca metne bakma** — zirvedeki metin çoğu zaman sadece \"has\" ya da \"gitti\" olur. " +
+    "Hamlenin yerini ses heyecanı zirveleri ve canlı sohbet patlamaları gösterir. " +
+    "Kesit hazırlığı, anı ve tepkiyi birlikte alsın — tek başına sonuç oynamaz.",
+  esports:
+    "Bu yayın e-spor maçı ya da anlatımı. Patlama önceliği: (1) maçı çeviren takım savaşı, gol ya da son saniye, " +
+    "(2) anlatıcının kopuşu, (3) tartışmalı kararlar, (4) oyuncunun bireysel şovu, (5) maç sonu röportajından alıntılar. " +
+    "Kanıt ağırlığı: anlatıcının ses patlamaları ve sohbet zirveleri skorun değiştiği yeri neredeyse bire bir gösterir — " +
+    "metne değil, onlara güven; anlatım hızında transkript hatalıdır, yanlış yazılmış kelimeyi içerik sanma. " +
+    "Kesitte durum hazırlığı → an → anlatıcı tepkisi birlikte olsun; yalnızca gol görüntüsü, anlatım sesi yoksa işe yaramaz.",
+  vtuber:
+    "Bu yayın VTuber yayını. **Dikkat: yüz ifadesi ve beden dili modelden gelir, insan yüzü sinyali burada işe yaramaz** — " +
+    "ona güvenme. Patlama önceliği: (1) karakterin arkasındaki kişinin rolü bırakıp gülmesi ya da ağzından kaçırması " +
+    "(en güçlü karşıtlık), (2) rol yapma sahneleri ve skeçler, (3) şarkı yayınlarında nakarat, " +
+    "(4) izleyici ya da meslektaşlarla unutulmaz etkileşim, (5) modelin ya da teknik altyapının patlaması (izleyici bunu çok sever). " +
+    "Kanıt ağırlığı: ton değişimi ve sohbet zirveleri ana kanıttır (sohbet bu türde olağanüstü hareketlidir, neredeyse canlı puanlama gibidir); " +
+    "görüntü enerjisi yalnız şarkı ve skeç bölümlerinde işe yarar. Şakanın hazırlığını da kesite al.",
+  show:
+    "Bu yayın performans yayını (dans, şarkı, grup gösterisi). **Dikkat: bu türde metnin bilgi değeri neredeyse yoktur** " +
+    "(dağınık hâl hatır sormalar ve laf kalabalığı); bir cümle \"okununca fena değil\" diye onu seçme — izleyicinin baktığı şey o değil. " +
+    "Patlama önceliği: (1) en akılda kalan performans bölümü (nakarat, zor hareket, tam oturmuş vuruşlar), " +
+    "(2) performans içindeki parlak tepkiler ve etkileşim, (3) güçlü açılış ya da kapanış görüntüsü. " +
+    "Kanıt ağırlığı: görüntü enerjisi, müziğin cümleleri ve sohbet zirveleri; metin yalnızca belli ki boş sohbet olan yerleri elemek için. " +
+    "Kesiti müziğin doğal cümlesine oturt (girişten gir, nakarat tam olsun, yarım vuruşta kesme); " +
+    "görüntünün bütünlüğü cümlenin bitmesinden önemli.",
+  looks:
+    "Bu yayın sohbet/tanışma yayını. Patlama önceliği: (1) karşı tarafın beklenmedik lafı ya da çuvallaması, " +
+    "(2) sunucunun hazır cevabı, (3) ani samimiyet, (4) şakalar ve ters köşeler, " +
+    "(5) parlak etkileşim (hediye teşekkürü, araya sıkışan yetenek). " +
+    "Kanıt ağırlığı: ton değişimi ve sohbet zirveleri. Bu türün çoğu zamanı bilgisiz hâl hatır ve hediye teşekkürü — " +
+    "**varsayılan olarak sert ol**; hiç kesit vermemek \"hediye için teşekkürler\" cümlesini kesmekten iyidir.",
+  talk:
+    "Bu yayın sohbet/yorum yayını. Patlama önceliği: (1) tartışmalı ya da doğaçlama söylenmiş sözler (kendi kendini yalanlama en güçlüsü), " +
+    "(2) yoğun şakalar ve skeçler (hazırlığı hep birlikte), (3) ani ciddiyet anları, " +
+    "(4) izleyiciyle unutulmaz etkileşim, (5) persona dönüşü. " +
+    "Kanıt ağırlığı: ton ve salonun tepkisi kelimeler kadar önemli; sohbet zirveleri izleyicinin canlı oylamasıdır.",
+  radio:
+    "Bu yayın radyo yayını, **görüntü yok** — çıktı dalga formu ya da kapak görseli üzerinden gider, " +
+    "dolayısıyla görüntü kanıtı diye bir şey yok, aramaya kalkma. " +
+    "Patlama önceliği: (1) bir şarkının nakaratı, (2) duygu yoğunluğu en yüksek anlatı bölümü, " +
+    "(3) dinleyiciyle parlak etkileşim, (4) çarpıcı cümleler. " +
+    "Kanıt ağırlığı: ton değişimi, gülüşme/alkış ve sohbet zirveleri elimizdeki her şey. " +
+    "Kesit kulağa bütün gelmeli — arkasını görüntü toplamadığı için, yarım kalan cümle bu türde affedilmez.",
+  knowledge:
+    "Bu yayın bilgi yayını. Patlama önceliği: (1) tek başına ayakta duran yöntemler ve sonuçlar (adımlar, listeler, somut sayılar), " +
+    "(2) alışılmışı tersine çeviren tespitler, (3) tek cümlede özetleyen çarpıcı sözler, " +
+    "(4) gerçek örnekler ve veriler, (5) tipik bir yanlışın anında düzeltilmesi. " +
+    "Kanıt ağırlığı: neredeyse tamamen içeriğe bakılır, ton sinyalinin değeri yok denecek kadar az. " +
+    "**Bu türün hedefi güldürmek değil, kaydettirmek** — platform artık kaydetmeye en yüksek ağırlığı veriyor. " +
+    "Kesit bilgi olarak kendi kendine yetsin: sonuç, gerekçe ve uygulanabilir adım içinde olmalı; yarım kalmasın.",
+  outdoor:
+    "Bu yayın dış mekân yayını. Patlama önceliği: (1) beklenmedik olaylar ve aksilikler (birinin çıkagelmesi, engellenmek, " +
+    "havanın bozması, bir şeyin bozulması), (2) yabancılarla gerçek etkileşim ve konuşmalar, " +
+    "(3) bir şeyi ilk kez görünce verilen anlık tepki, (4) \"gidilir mi gidilmez mi\" konusunda açık sözlü değerlendirme, " +
+    "(5) güçlü görüntü. " +
+    "Kanıt ağırlığı: tepki ağırlıklı — ton ve görüntü değişimi metinden güvenilir; " +
+    "**dış mekânda ses kötüdür, transkriptte çok hata olur**, yanlış kelimelere aldanma, okunmayan cümleyi gürültü say. " +
+    "Kesite \"görmeden önce\"den küçük bir hazırlık al; izleyici de sunucuyla birlikte keşfetsin.",
+  food:
+    "Bu yayın yemek yayını. **Bu türde ikna gücü görüntüde ve sestedir, anlatımda değil.** " +
+    "Patlama önceliği: (1) en iştah açıcı lokma (uzayan peynir, akan suyu, çıtırtı sesi), " +
+    "(2) hazırlık ve tencere hareketi gibi izlenesi işler, (3) beklenmedik tat (aşırı acı, berbat, harika) karşısında gerçek tepki, " +
+    "(4) malzeme ya da fiyatla ilgili şaşırtıcı bilgi. " +
+    "Kanıt ağırlığı: önce görüntü enerjisi ile yeme/pişirme ses zirveleri, sonra sohbet; " +
+    "metin çoğunlukla \"mmm güzel\" — bunu çarpıcı söz sanma. " +
+    "Kesit tam bir hareketi içersin (ocağa girişten tabağa, çataldan ağza); yarıda kesmek iştahı en çok kaçıran şey.",
+  pet:
+    "Bu yayın evcil hayvan yayını. **Başrol konuşamıyor, metin burada hiçbir şekilde kanıt değil.** " +
+    "Patlama önceliği: (1) hayvanın beklenmedik ya da insansı bir şey yaptığı an, (2) unutulmaz etkileşimler, " +
+    "(3) en sevimli durağan kareler, (4) sahibinin alt edilme tepkisi. " +
+    "Kanıt ağırlığı: görüntü enerjisi ve sohbet zirveleri neredeyse tek kanıt; sahibinin tonu \"az önce ne oldu\"yu bulmaya yardım eder. " +
+    "Kesit kısa ve ilk bakışta anlaşılır olsun — ilk saniyede hayvan ekranda görünmeli.",
+  sports:
+    "Bu yayın spor/fitness yayını. Patlama önceliği: (1) zor hareketin tamamlandığı ya da rekorun kırıldığı an, " +
+    "(2) başarısızlık/kaza/sürpriz (izleyici bunu da sever, ama gerçek bir yaralanmayı sömürme), " +
+    "(3) tek cümlede anlatılan antrenman püf noktası, (4) öncesi/sonrası karşılaştırma. " +
+    "Kanıt ağırlığı: görüntü enerjisi ve ses patlamaları birlikte, sohbet destek; " +
+    "hareket sırasında metin sadece nefes ve sayı, bilgi yok. " +
+    "Eğitim kesiti kendi kendine yetsin (ne yapılacak, nereyi çalıştırır, hata nerede); \"hadi beş tane daha\" demekle kesit olmaz.",
+  craft:
+    "Bu yayın el işi/çizim/ambiyans yayını. **Bu tür çok yavaş akar, zamanın çoğu kesilmeye değmez** — varsayılan olarak sert ol. " +
+    "Patlama önceliği: (1) yoktan vara giden kritik adım (ilk renk, ortaya çıkış anı), (2) ıskalama ve kurtarma, " +
+    "(3) hızlandırılınca çalışan bölüm, (4) gerçek bir teknik anlatımı. " +
+    "Kanıt ağırlığı: önce görüntü değişimi (ortaya çıkış anı kare farkı en büyük yerdir), sonra sohbet; anlatım sesi olmasa da olur. " +
+    "\"Değişimin en büyük olduğu\" anı seç, \"boyamaya devam edilen\" uzun bölümü değil.",
+  cowatch:
+    "Bu yayın birlikte izleme/ders çalışma yayını. **⚠ İki katı kural, iyi seçmekten önemli:** " +
+    "(1) ekranda oynayan yapım başkasının telifli içeriği — **yapımın görüntüsünü olduğu gibi kesip yayınlama**; " +
+    "bu reupload'dır, indirilir; (2) ders çalışma yayınında kesilecek bir şey yoktur; çoğu durumda doğru cevap \"hiç kesit yok\"tur. " +
+    "Yine de seçeceksen yalnızca **sunucunun kendi** tepkisini ve yorumunu al (kadrajda sunucu, seste sunucu olan bölümler) " +
+    "ve kaynaktan bağımsız ayakta durması şart. " +
+    "Kanıt ağırlığı: sunucunun ses patlamaları ve sohbet zirveleri; görüntü sinyali burada oynatılan telifli yapıyı gösterir, " +
+    "**seçim gerekçesi olamaz**.",
+  interview:
+    "Bu yayın söyleşi/podcast. Patlama önceliği: (1) keskin bir soru ve kaçamayan bir yanıt, " +
+    "(2) yayında gerçek fikir ayrılığı, (3) ağzından kaçan ya da ilk kez açıklanan bilgi, " +
+    "(4) tek başına ayakta duran görüş, (5) çıplak kişisel hikâye. " +
+    "Kanıt ağırlığı: içerik odaklı. " +
+    "**Soru ve yanıt birlikte kalmalı** — yalnızca yanıt olursa izleyici neye yanıt verildiğini anlamaz; " +
+    "konuşmacı değişen yerlerde kesit tam soru ve tam yanıtı içersin, iki kişinin yarım cümlesi asla birleştirilmesin.",
+  custom: "",
+};
+
 /** 按 id 取预设;未知 id 回落到 auto。纯函数。 */
 export function genrePreset(id: string | undefined): GenrePreset {
   return GENRE_PRESETS.find((g) => g.id === id) ?? GENRE_PRESETS[0];
@@ -439,14 +592,29 @@ export const GENRE_CUSTOM_MAX_CHARS = 1200;
  * 生成注入 system prompt 的品类段。
  * `customCriteria` 非空时一律优先——用户写的永远盖过内置预设,
  * 这样"选个最接近的预设再改两句"是顺手的用法。返回 "" 表示不注入。纯函数。
+ *
+ * 语言参数从布尔换成 AppLang:布尔只能表达"中文/非中文",非中文里 tr 与 en 的
+ * 判据文本不是同一份。zh/en 的输出逐字节不变(标题行与判据文本都没动)。
  */
 export function genreSection(
   id: string | undefined,
-  zh: boolean,
+  lang: AppLang,
   customCriteria?: string
 ): string {
   const custom = (customCriteria ?? "").trim().slice(0, GENRE_CUSTOM_MAX_CHARS);
-  const body = custom || (zh ? genrePreset(normalizeGenreId(id)).criteriaZh : genrePreset(normalizeGenreId(id)).criteriaEn);
+  const preset = genrePreset(normalizeGenreId(id));
+  const body =
+    custom ||
+    (lang === "tr" ? GENRE_CRITERIA_TR[preset.id] : lang === "en" ? preset.criteriaEn : preset.criteriaZh);
   if (!body) return "";
-  return zh ? `\n\n【本场类型与判据】${body}` : `\n\n[Stream type & criteria] ${body}`;
+  if (lang === "zh") return `\n\n【本场类型与判据】${body}`;
+  if (lang === "tr") return `\n\n[Yayın türü ve ölçütler] ${body}`;
+  return `\n\n[Stream type & criteria] ${body}`;
+}
+
+/** 品类显示名(审阅台下拉、监听文件夹弹窗)。zh/en 取预设字段,tr 取表。纯函数。 */
+export function genreLabel(preset: GenrePreset, lang: AppLang): string {
+  if (lang === "zh") return preset.labelZh;
+  if (lang === "tr") return GENRE_LABEL_TR[preset.id];
+  return preset.labelEn;
 }

@@ -501,6 +501,15 @@ describe("Türkçe prompt yolu", () => {
     expect(highlightSystemPrompt(trTx, "extended")).toContain("Süre 60–120 saniye");
   });
 
+  it("Türkçe prompt'ta kategori ölçütleri de Türkçe gelir", () => {
+    const out = highlightSystemPrompt(trTx, "standard", [], undefined, undefined, { id: "shopping" }, undefined, undefined, "tr");
+    expect(out).toContain("[Yayın türü ve ölçütler]");
+    expect(out).toContain("canlı satış");
+    // İngilizce gövdeye düşmemeli (eski davranış) ve CJK sızmamalı
+    expect(out).not.toContain("[Stream type & criteria]");
+    expect(out).not.toMatch(/[一-鿿]/);
+  });
+
   it("değerlendirme ve moment kanalı da Türkçe", () => {
     expect(reviewSystemPrompt(trTx)).toContain("denetçisisin");
     expect(momentSystemPrompt("tr")).toContain("yüksek enerjili");

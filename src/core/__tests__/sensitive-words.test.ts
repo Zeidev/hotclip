@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findSensitiveRanges, mapSensitiveRanges, sanitizeSensitiveWords } from "../sensitive-words";
+import { DEFAULT_SENSITIVE_WORDS, findSensitiveRanges, mapSensitiveRanges, sanitizeSensitiveWords } from "../sensitive-words";
 import { buildCutArgs, buildJumpCutArgs } from "../cut";
 import { audiogramSpec, buildAudiogramArgs } from "../audiogram";
 
@@ -27,6 +27,23 @@ describe("sensitive word timing", () => {
 
   it("sanitizes, deduplicates and bounds custom terms", () => {
     expect(sanitizeSensitiveWords([" shit ", "shit", "", 3])).toEqual(["shit"]);
+  });
+
+  it("Türkçe küfürler varsayılan listede (Çince kelimeler TR yayında hiç tutmaz)", () => {
+    expect(DEFAULT_SENSITIVE_WORDS).toContain("orospu");
+    expect(DEFAULT_SENSITIVE_WORDS).toContain("göt");
+    expect(DEFAULT_SENSITIVE_WORDS).toContain("siktir");
+  });
+
+  it("Türkçe harfli kelimede de tam-kelime eşleşir, kökü paylaşan normal kelimeyi kesmez", () => {
+    // "göt" tam kelime olarak yakalanır (ı/ş/ğ Latin sayılıyor olmalı)
+    const hit = findSensitiveRanges([{ text: "GÖT", startSec: 1, endSec: 1.5 }], ["göt"], 0);
+    expect(hit).toEqual([{ startSec: 1, endSec: 1.5 }]);
+    // "götür" (götürmek) sadece kökü paylaşır — kesilmemeli
+    const miss = findSensitiveRanges([{ text: "götür", startSec: 2, endSec: 2.8 }], ["göt"], 0);
+    expect(miss).toEqual([]);
+    const miss2 = findSensitiveRanges([{ text: "götürdüm", startSec: 3, endSec: 3.8 }], ["götür"], 0);
+    expect(miss2).toEqual([]);
   });
 
   it("injects mute windows into single, jump-cut and audiogram audio graphs", () => {

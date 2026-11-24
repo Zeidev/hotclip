@@ -39,10 +39,29 @@ const EN_PATTERNS: RegExp[] = [
   /\bsomeone\s+clip\b/i,
 ];
 
+/**
+ * 土耳其语口令模式:
+ *  1. 指代 + klip/kes:「burayı/şunu/bunu/bu kısmı ...... kliple/klip yap/kes」;
+ *  2. 动词本身:kliple / klip yap / klip al / klip çıkar;
+ *  3. 祈使前缀 + 动词:hadi/bakalım/lütfen/not al。
+ * ⚠ 不能用 \b 卡土耳其语侧的词首(ş/ı/ğ 在 JS 眼里不是单词字符,\b 判不出来),
+ * 所以指代与动词都写成完整词形;kliple 后面显式加 \b,否则 klipler(复数
+ * 「剪辑们」)也会命中。
+ */
+const TR_PATTERNS: RegExp[] = [
+  /(?:buray[ıi]|şuray[ıi]|buras[ıi]|şuras[ıi]|şunu|bunu|bu kısm[ıi]|şu kısm[ıi]|bu bölümü|şu bölümü)[^.!?]{0,12}?(?:klip|kes bunu|not al)/i,
+  /\bklip(?:le\b|leyin|leyebilir|liyorum)|klip\s(?:yap|al|ç[ıi]kar|oluştur)/i,
+  /(?:hadi|bakal[ıi]m|lütfen|işaretle)[^.!?]{0,8}?(?:kliple|klip yap|klip al|klip ç[ıi]kar)/i,
+];
+
 /** 一句话是否命中剪辑口令。 */
 export function isClipCommand(text: string): boolean {
   if (!text) return false;
-  return ZH_PATTERNS.some((p) => p.test(text)) || EN_PATTERNS.some((p) => p.test(text));
+  return (
+    ZH_PATTERNS.some((p) => p.test(text)) ||
+    EN_PATTERNS.some((p) => p.test(text)) ||
+    TR_PATTERNS.some((p) => p.test(text))
+  );
 }
 
 /**

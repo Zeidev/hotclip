@@ -8,10 +8,18 @@
 import type { TranscriptWord } from "../shared/api-types";
 import type { KeptSegment } from "./gaps";
 
-/** Unambiguous hesitation tokens (standalone words only). */
+/**
+ * Unambiguous hesitation tokens (standalone words only).
+ *
+ * Turkish: only the elongated pure-vowel hums qualify. "şey", "yani", "hani",
+ * "işte" are real words — cutting them removes meaning ("o şey" loses its noun),
+ * so they stay out, same reasoning as 然后/那个. "aa"/"ha" are excluded too:
+ * they usually carry surprise or agreement, not hesitation.
+ */
 const FILLER_TOKENS = new Set([
   "嗯", "呃", "额", "唔", "嗯嗯", "呃呃",
   "um", "uh", "er", "erm", "hmm", "mmm",
+  "ee", "eee", "eeeee", "ıı", "ııı", "hıı", "hımm",
 ]);
 
 /** Stutter repeats longer than this are probably deliberate emphasis. */

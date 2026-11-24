@@ -18,6 +18,22 @@ describe("findFillerWords", () => {
     expect(findFillerWords(words)).toEqual([]);
   });
 
+  it("Türkçe dolgu seslerini yakalar, gerçek kelimelere dokunmaz", () => {
+    const words = [
+      w("ee", 0, 0.2), w("hmm", 0.3, 0.5), w("ürün", 0.6, 1.0),
+      w("ıı", 1.1, 1.3), w("güzel", 1.4, 1.8),
+    ];
+    const hits = findFillerWords(words);
+    expect(hits.map((h) => h.index)).toEqual([0, 1, 3]);
+    expect(hits.every((h) => h.kind === "filler")).toBe(true);
+  });
+
+  it("Türkçe gerçek kelimeler dolgu sayılmaz (şey/yani/hani/işte)", () => {
+    // «o şey» gibi ifadelerde şey bir isim; kesmek anlamı götürür
+    const words = [w("şey", 0, 0.3), w("yani", 0.4, 0.7), w("hani", 0.8, 1.0), w("işte", 1.1, 1.4)];
+    expect(findFillerWords(words)).toEqual([]);
+  });
+
   it("flags the first of an immediate stutter repeat, not slow deliberate repeats", () => {
     const stutter = [w("这个", 0, 0.3), w("这个", 0.35, 0.65), w("很好", 0.7, 1.0)];
     const hits = findFillerWords(stutter);

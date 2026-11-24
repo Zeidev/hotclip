@@ -345,8 +345,8 @@ export function highlightSystemPrompt(
       .replace("Süre 8–40 saniye", `Süre ${minSec}–${maxSec} saniye (katı kural, kısa kalması uzamasından iyidir)`);
   }
   // 品类判据:不同品类连"该信哪路证据"都不一样,放在通用判据之后覆盖它
-  // (品类预设只有 zh/en 两版文字,tr 仍注入 en;补齐见 docs/releases/v0.34.0.md 的已知缺口)
-  if (genre) base += genreSection(genre.id, zh, genre.custom);
+  // (三语齐备:zh/en 在预设字面量里,tr 在 genre.ts 的 GENRE_CRITERIA_TR 表)
+  if (genre) base += genreSection(genre.id, lang, genre.custom);
   if (products.length > 0) base += productSection(products, lang);
   // 用户点题:明确的人工意图,优先级压过通用判据(对齐 OpusClip Contextual Prompting)
   base += briefSection(brief, lang);

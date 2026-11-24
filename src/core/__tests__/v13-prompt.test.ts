@@ -89,8 +89,8 @@ describe("带货三段式(痛点→演示→价格)", () => {
     expect(s).toContain("pain point → demo → price");
   });
   it("shopping 品类判据也带三段式(没填商品词时也生效)", () => {
-    expect(genreSection("shopping", true)).toContain("痛点→演示→价格");
-    expect(genreSection("shopping", false)).toContain("pain→demo→price");
+    expect(genreSection("shopping", "zh")).toContain("痛点→演示→价格");
+    expect(genreSection("shopping", "en")).toContain("pain→demo→price");
   });
 });
 
