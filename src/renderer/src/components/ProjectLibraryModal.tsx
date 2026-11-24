@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { LuFileClock, LuFileWarning, LuFolderInput, LuFolderOpen, LuPencil, LuSearch, LuTrash2, LuX } from "react-icons/lu";
 import type { ProjectSourceStatus, ProjectSummary } from "../../../shared/api-types";
 import { useLocaleStore, useT } from "../i18n/store";
+import { intlLocale } from "../i18n/messages";
 
 interface Props {
   projects: ProjectSummary[];
@@ -48,7 +49,7 @@ export function ProjectLibraryModal({ projects, activeProjectId, onClose, onNew,
   const formatTime = (value: string): string => {
     const date = new Date(value);
     return Number.isFinite(date.getTime())
-      ? new Intl.DateTimeFormat(locale === "zh" ? "zh-CN" : "en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date)
+      ? new Intl.DateTimeFormat(intlLocale(locale), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date)
       : value;
   };
 

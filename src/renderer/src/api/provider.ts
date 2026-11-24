@@ -11,6 +11,7 @@ import type {
   MediaInfo,
   Transcript,
   TranscribeProgressEvent,
+  DetectStageEvent,
   HighlightCandidate,
   DetectHighlightsResult,
   ExportProgressEvent,
@@ -77,6 +78,9 @@ const emit = (p: TranscribeProgressEvent): void => progressListeners.forEach((cb
 type ExportCb = (p: ExportProgressEvent) => void;
 const exportListeners = new Set<ExportCb>();
 const emitExport = (p: ExportProgressEvent): void => exportListeners.forEach((cb) => cb(p));
+type DetectStageCb = (p: DetectStageEvent) => void;
+const detectStageListeners = new Set<DetectStageCb>();
+const emitDetectStage = (p: DetectStageEvent): void => detectStageListeners.forEach((cb) => cb(p));
 const urlImportListeners = new Set<(p: UrlImportProgressEvent) => void>();
 const emitUrlImport = (p: UrlImportProgressEvent): void => urlImportListeners.forEach((cb) => cb(p));
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -348,6 +352,10 @@ const browserMock: HotClipApi = {
   onTranscribeProgress(cb) {
     progressListeners.add(cb);
     return () => progressListeners.delete(cb);
+  },
+  onDetectStage(cb) {
+    detectStageListeners.add(cb);
+    return () => detectStageListeners.delete(cb);
   },
   async exportClips(_filePath, clips, options) {
     mockExportCancelled = false;
@@ -663,7 +671,13 @@ const browserMock: HotClipApi = {
     window.open(url, "_blank", "noreferrer");
   },
   async detectHighlights(transcript, _llm, _filePath, diarize, prefilter, vision, _length, products, referencePath, _genre, _brief, scan): Promise<DetectHighlightsResult> {
-    await sleep(1500);
+    // 浏览器预览:按真实顺序走一遍阶段提示,让等待期不像是卡住
+    emitDetectStage({ stage: referencePath ? "reference" : "signals" });
+    await sleep(500);
+    emitDetectStage({ stage: prefilter ? "prefilter" : "select" });
+    await sleep(600);
+    emitDetectStage({ stage: "review" });
+    await sleep(400);
     // 浏览器预览:给了参考视频就演示一份画像
     const reference = referencePath
       ? { durationSec: 42, speechRate: 5.2, avgSentenceLen: 14, cutsPerMin: 18, hookLine: "你敢信这是同一个人剪的?", zh: true }

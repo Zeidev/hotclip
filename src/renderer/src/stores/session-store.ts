@@ -18,6 +18,7 @@ import type {
   DanmakuStats,
   VoiceTagStats,
   ReferenceInfo,
+  DetectStage,
   SessionCheckpoint,
   SessionEditCommand,
   SessionEditHistory,
@@ -63,6 +64,10 @@ interface SessionState {
   /** 右栏正在查看详情的候选 id(与勾选无关)。 */
   focusedId: number | null;
   detecting: boolean;
+  /** 检测跑到哪一步了(粗粒度标签,不表示比例);仅 detecting 时有意义。 */
+  detectStage: DetectStage;
+  /** 本轮检测开始的时间戳(ms),用来显示已用时长;null = 未在跑。 */
+  detectStartedAt: number | null;
   detectError: string | null;
   stats: DetectStats;
 
@@ -89,6 +94,7 @@ interface SessionState {
   redoEdit: () => void;
   setFocusedId: (id: number | null) => void;
   setDetecting: (v: boolean) => void;
+  setDetectStage: (s: DetectStage) => void;
   setDetectError: (msg: string | null) => void;
   setStats: (s: DetectStats) => void;
   setDiarize: (v: boolean) => void;
@@ -110,6 +116,8 @@ export const useSession = create<SessionState>((set, get) => ({
   selected: new Set<number>(),
   focusedId: null,
   detecting: false,
+  detectStage: "starting",
+  detectStartedAt: null,
   detectError: null,
   stats: EMPTY_STATS,
   diarize: false,
@@ -179,7 +187,8 @@ export const useSession = create<SessionState>((set, get) => ({
   undoEdit: () => set((state) => replayHistory(state, "undo")),
   redoEdit: () => set((state) => replayHistory(state, "redo")),
   setFocusedId: (focusedId) => set({ focusedId }),
-  setDetecting: (detecting) => set({ detecting }),
+  setDetecting: (detecting) => set({ detecting, ...(detecting ? { detectStage: "starting" as DetectStage, detectStartedAt: Date.now() } : { detectStartedAt: null }) }),
+  setDetectStage: (detectStage) => set({ detectStage }),
   setDetectError: (detectError) => set({ detectError }),
   setStats: (stats) => set({ stats }),
   setDiarize: (diarize) => set({ diarize }),
@@ -197,6 +206,7 @@ export const useSession = create<SessionState>((set, get) => ({
       selected: new Set(checkpoint.selected.filter((id) => ids.has(id))),
       focusedId: checkpoint.focusedId !== null && ids.has(checkpoint.focusedId) ? checkpoint.focusedId : null,
       detecting: false,
+      detectStartedAt: null,
       detectError: null,
       stats: checkpoint.stats,
       diarize: checkpoint.diarize,
@@ -215,6 +225,8 @@ export const useSession = create<SessionState>((set, get) => ({
       selected: new Set<number>(),
       focusedId: null,
       detecting: false,
+      detectStage: "starting",
+      detectStartedAt: null,
       detectError: null,
       stats: EMPTY_STATS,
       diarize: false,

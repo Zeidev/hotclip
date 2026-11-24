@@ -19,6 +19,8 @@ export function useDetection(): { run: () => Promise<void> } {
     if (!s.transcript || s.detecting) return;
     s.setDetecting(true);
     s.setDetectError(null);
+    // 阶段提示只是「卡在哪一步」的标签:主进程发、这里收,漏掉几帧不影响结果。
+    const offStage = getApi().onDetectStage((p) => useSession.getState().setDetectStage(p.stage));
     try {
       const focus = prefs.briefFocus.trim();
       const exclude = prefs.briefExclude.trim();
@@ -59,6 +61,7 @@ export function useDetection(): { run: () => Promise<void> } {
       // IPC 包装串只会淹没真正有用的那句话——先剥壳再展示(issue #6)
       useSession.getState().setDetectError(stripIpcError(e instanceof Error ? e.message : String(e)));
     } finally {
+      offStage();
       useSession.getState().setDetecting(false);
     }
   }, [config, prefilter, vision, prefs]);

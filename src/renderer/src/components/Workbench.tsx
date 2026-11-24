@@ -163,6 +163,30 @@ function StatsLine(): React.JSX.Element | null {
   );
 }
 
+/**
+ * 检测等待期的阶段提示:主进程报的粗粒度标签 + 已用时长。
+ * 阶段之间没有比例关系(信号/画面/语气是并发跑的,谁先回来谁报),所以这里
+ * 只显示「现在在做哪一步」,不画进度条——画了就是骗人。
+ */
+function DetectStageLine(): React.JSX.Element {
+  const t = useT("workbench");
+  const stage = useSession((s) => s.detectStage);
+  const startedAt = useSession((s) => s.detectStartedAt);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsed = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+  const clock = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
+  return (
+    <>
+      <p className="shimmer text-[12.5px] font-semibold">{t(`detectStage_${stage}`)}</p>
+      {startedAt !== null && <p className="text-[11px] tabular-nums text-mut">{t("detectElapsed", { t: clock })}</p>}
+    </>
+  );
+}
+
 export function Workbench({ onCloseProject }: { onCloseProject: () => void }): React.JSX.Element {
   const t = useT("workbench");
   const th = useT("highlights");
@@ -471,7 +495,7 @@ export function Workbench({ onCloseProject }: { onCloseProject: () => void }): R
               ) : detecting ? (
                 <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-line/60 bg-panel/60">
                   <LuSparkles className="h-6 w-6 animate-pulse text-ember" />
-                  <p className="shimmer text-[12.5px] font-semibold">{t("detectingNow")}</p>
+                  <DetectStageLine />
                 </div>
               ) : detectError ? (
                 <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-line/60 bg-panel/60 p-6">

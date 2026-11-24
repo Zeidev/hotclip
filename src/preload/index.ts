@@ -3,7 +3,7 @@
  * The renderer never touches ipcRenderer — only this typed bridge.
  */
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import type { HotClipApi, TranscribeProgressEvent, ExportProgressEvent, UrlImportProgressEvent, WatchEvent, DiagnosticsProgressEvent } from "../shared/api-types";
+import type { HotClipApi, TranscribeProgressEvent, ExportProgressEvent, UrlImportProgressEvent, WatchEvent, DiagnosticsProgressEvent, DetectStageEvent } from "../shared/api-types";
 
 const api: HotClipApi = {
   selectMedia: () => ipcRenderer.invoke("hotclip:select-media"),
@@ -40,6 +40,11 @@ const api: HotClipApi = {
   },
   detectHighlights: (transcript, llm, filePath, diarize, prefilter, vision, length, products, referencePath, genre, brief, scan, maxClips, promptLang) =>
     ipcRenderer.invoke("hotclip:detect-highlights", transcript, llm, filePath, diarize, prefilter, vision, length, products, referencePath, genre, brief, scan, maxClips, promptLang),
+  onDetectStage: (cb) => {
+    const listener = (_e: IpcRendererEvent, p: DetectStageEvent): void => cb(p);
+    ipcRenderer.on("hotclip:detect-stage", listener);
+    return () => ipcRenderer.removeListener("hotclip:detect-stage", listener);
+  },
   exportClips: (filePath, clips, options) => ipcRenderer.invoke("hotclip:export-clips", filePath, clips, options),
   onExportProgress: (cb) => {
     const listener = (_e: IpcRendererEvent, p: ExportProgressEvent): void => cb(p);
