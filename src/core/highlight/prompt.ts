@@ -15,6 +15,7 @@ import { referencePromptSection, type ReferenceProfile } from "../reference";
 import { reviewMemorySection, type ReviewRecord } from "../review-memory";
 import { performanceMemorySection, type PerformanceEntry } from "../performance-memory";
 import { genreSection } from "../genre";
+import { hookCraftSection, onScreenHookRules } from "../hook-craft";
 import { clipDurationSec, isStitched, type ClipPiece } from "../../shared/pieces";
 import { CLIP_LENGTH_RANGES, DEFAULT_MAX_CLIPS } from "../../shared/detection-options";
 export { CLIP_LENGTH_RANGES } from "../../shared/detection-options";
@@ -344,6 +345,10 @@ export function highlightSystemPrompt(
       .replace("Length 8–40 seconds", `Length ${minSec}–${maxSec} seconds (hard requirement)`)
       .replace("Süre 8–40 saniye", `Süre ${minSec}–${maxSec} saniye (katı kural, kısa kalması uzamasından iyidir)`);
   }
+  // 钩子/标题写法:管的是模型自己写的 title(选 hook 的那套判据已在字面量里)。
+  // 必须在时长改写**之后**追加——教义块里不含时长档位字符串,反过来也不会被
+  // 上面的 replace 误伤。
+  base += hookCraftSection(lang);
   // 品类判据:不同品类连"该信哪路证据"都不一样,放在通用判据之后覆盖它
   // (三语齐备:zh/en 在预设字面量里,tr 在 genre.ts 的 GENRE_CRITERIA_TR 表)
   if (genre) base += genreSection(genre.id, lang, genre.custom);
@@ -754,9 +759,10 @@ export interface PromptMoment {
 
 /** The moment-channel system prompt for a language decision (detect.ts entry point). */
 export function momentSystemPrompt(lang: PromptLang): string {
-  if (lang === "zh") return MOMENT_SYSTEM_PROMPT_ZH;
-  if (lang === "tr") return MOMENT_SYSTEM_PROMPT_TR;
-  return MOMENT_SYSTEM_PROMPT_EN;
+  // 信号通道也要起标题写钩子(无台词直播),写法教义同样追加在尾部
+  if (lang === "zh") return MOMENT_SYSTEM_PROMPT_ZH + hookCraftSection("zh");
+  if (lang === "tr") return MOMENT_SYSTEM_PROMPT_TR + hookCraftSection("tr");
+  return MOMENT_SYSTEM_PROMPT_EN + hookCraftSection("en");
 }
 
 export function buildMomentPrompt(moments: PromptMoment[], maxClips: number, lang: PromptLang): string {
@@ -872,10 +878,12 @@ Her kesit için "sıfır bağlam" kararını ver — yayını hiç görmemiş gi
 "drop" demekten çekinme: yapay zekâ seçimlerinin %30-45'i çöp çıkıyor ve bu sektörün gerçeği; çöp yayınlamanın bedelini bütün hesap ödüyor. Yayın öncesi son kalite kapısı sensin. keep alanını doldurmaya devam et (publish için true, kalanı false).`;
 
 export function reviewSystemPrompt(transcript: Transcript, langOverride?: PromptLang | PromptLangChoice): string {
+  // teaser 是评审自己写的画面悬念句:短版写法要点(完整教义会挤掉评审本身)
   const lang = promptLanguage(transcript, langOverride);
-  if (lang === "zh") return REVIEW_SYSTEM_PROMPT_ZH;
-  if (lang === "tr") return REVIEW_SYSTEM_PROMPT_TR;
-  return REVIEW_SYSTEM_PROMPT_EN;
+  const rules = onScreenHookRules(lang);
+  if (lang === "zh") return `${REVIEW_SYSTEM_PROMPT_ZH}\n\n${rules}`;
+  if (lang === "tr") return `${REVIEW_SYSTEM_PROMPT_TR}\n\n${rules}`;
+  return `${REVIEW_SYSTEM_PROMPT_EN}\n\n${rules}`;
 }
 
 const REVIEW_SHAPE = `{
@@ -889,6 +897,7 @@ const REVIEW_SHAPE = `{
       "payoff": 85, "payoffNote": "...",
       "loop": true,
       "teaser": "...",
+      "titleFix": "...",
       "note": "..."
     }
   ]
@@ -944,10 +953,10 @@ export function buildReviewPrompt(
     })
     .join("\n\n");
   if (zh) {
-    return `逐条盲评下面的候选片段。hook/flow/value/trend 四维各 0-100 打分(横向比较)+ 各一句话理由;payoff=开头许诺的东西在片内兑现了没有(0-100,payoffNote 里写清是哪一句兑现的、没有就写「没有兑现」);teaser=≤15字悬念句(勾人不剧透,逐句稿同款语言);loop=≤30秒片段能不能无缝循环重看(true/false);verdict=质量门三档(publish/review/drop,判法见系统要求);keep 与 verdict 对应(publish=true,其余 false);note=一句话总评(review/drop 必须说清具体硬伤)。\n\n${blocks}\n\n【输出格式】严格输出 JSON,不要任何多余文字:\n${REVIEW_SHAPE}`;
+    return `逐条盲评下面的候选片段。hook/flow/value/trend 四维各 0-100 打分(横向比较)+ 各一句话理由;payoff=开头许诺的东西在片内兑现了没有(0-100,payoffNote 里写清是哪一句兑现的、没有就写「没有兑现」);teaser=≤15字悬念句(勾人不剧透,逐句稿同款语言);titleFix=候选现在的标题若是套话开头/超长/带话题标签或风险词,就写一个改好的标题(≤20字,按写法要点),标题本来就够好就留空字符串;loop=≤30秒片段能不能无缝循环重看(true/false);verdict=质量门三档(publish/review/drop,判法见系统要求);keep 与 verdict 对应(publish=true,其余 false);note=一句话总评(review/drop 必须说清具体硬伤)。\n\n${blocks}\n\n【输出格式】严格输出 JSON,不要任何多余文字:\n${REVIEW_SHAPE}`;
   }
   if (tr) {
-    return `Aşağıdaki adayları tek tek kör değerlendirmeden geçir. hook/flow/value/trend dört boyutun her birine 0-100 puan ver (birbirine göre kıyaslayarak) ve her boyuta tek cümle gerekçe yaz; payoff = açılışın kurduğu söz kesit içinde ödendi mi (0-100; payoffNote içinde hangi cümlenin ödediğini yaz, ödeyen yoksa "ödeyen yok" yaz); teaser = ≤6 kelimelik merak cümlesi (merak uyandırır, spoiler vermez, dökümün diliyle); loop = ≤30 sn kesit dikişsiz tekrar izlenebiliyor mu (true/false); verdict = kalite kapısı üç kademesi (publish/review/drop, kurallar sistem mesajında); keep, verdict ile uyumlu olsun (sadece publish için true); note = tek cümlelik genel değerlendirme (review/drop için kusuru mutlaka söyle).\n\n${blocks}\n\n【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:\n${REVIEW_SHAPE}`;
+    return `Aşağıdaki adayları tek tek kör değerlendirmeden geçir. hook/flow/value/trend dört boyutun her birine 0-100 puan ver (birbirine göre kıyaslayarak) ve her boyuta tek cümle gerekçe yaz; payoff = açılışın kurduğu söz kesit içinde ödendi mi (0-100; payoffNote içinde hangi cümlenin ödediğini yaz, ödeyen yoksa "ödeyen yok" yaz); teaser = ≤6 kelimelik merak cümlesi (merak uyandırır, spoiler vermez, dökümün diliyle); titleFix = adayın şimdiki başlığı kalıp sözle başlıyorsa, çok uzunsa ya da hashtag/risk sözcüğü içeriyorsa düzeltilmiş başlığı yaz (≤8 kelime, yazma kurallarına göre), başlık zaten iyiyse boş bırak; loop = ≤30 sn kesit dikişsiz tekrar izlenebiliyor mu (true/false); verdict = kalite kapısı üç kademesi (publish/review/drop, kurallar sistem mesajında); keep, verdict ile uyumlu olsun (sadece publish için true); note = tek cümlelik genel değerlendirme (review/drop için kusuru mutlaka söyle).\n\n${blocks}\n\n【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:\n${REVIEW_SHAPE}`;
   }
-  return `Blind-review each candidate below. Score hook/flow/value/trend 0-100 each (relative) with a one-line reason per dimension; payoff = was the opening's promise delivered inside the clip (0-100; payoffNote names the line that pays it off, or says nothing does); teaser = a ≤8-word suspense line (intriguing, no spoilers, transcript language); loop = can a ≤30s clip be rewatched seamlessly (true/false); verdict = the three-tier gate (publish/review/drop, per the system rules); keep mirrors verdict (true only for publish); note = one-line overall verdict (must name the flaw for review/drop).\n\n${blocks}\n\n【Output format】STRICT JSON only:\n${REVIEW_SHAPE}`;
+  return `Blind-review each candidate below. Score hook/flow/value/trend 0-100 each (relative) with a one-line reason per dimension; payoff = was the opening's promise delivered inside the clip (0-100; payoffNote names the line that pays it off, or says nothing does); teaser = a ≤8-word suspense line (intriguing, no spoilers, transcript language); titleFix = if the candidate's current title opens with filler, runs long, or carries a hashtag/risk term, write a corrected title (≤12 words, per the writing rules), and leave it empty when the title is already good; loop = can a ≤30s clip be rewatched seamlessly (true/false); verdict = the three-tier gate (publish/review/drop, per the system rules); keep mirrors verdict (true only for publish); note = one-line overall verdict (must name the flaw for review/drop).\n\n${blocks}\n\n【Output format】STRICT JSON only:\n${REVIEW_SHAPE}`;
 }

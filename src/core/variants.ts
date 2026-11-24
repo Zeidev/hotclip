@@ -11,6 +11,8 @@ import type { LlmConfig } from "../shared/api-types";
 import type { AppLang } from "../shared/ui-lang";
 import { stripThinkBlocks } from "./highlight/prefilter";
 import { hookAngleMenu, ctaMenu } from "./copy-templates";
+import { onScreenHookRules } from "./hook-craft";
+import { filterDuplicatePackagings } from "./hook-quality";
 import { parsePostFields, publishUserPrompt, type PublishCopy, type PublishSource, type PublishChatFn } from "./publish";
 import type { ExportClipSpec } from "./export";
 
@@ -44,6 +46,8 @@ export function variantSystemPrompt(lang: AppLang, extraCount: number): string {
       "CTA 菜单:",
       ctaMenu("zh"),
       "同一条切片的各版必须用不同 angle,与原版标题的角度也要错开。",
+      "每版换一个写法机制(反常识/停止式/提问/结果反差/痛点点名),不是同一句话换词。",
+      onScreenHookRules("zh"),
       '严格只输出 JSON:{"clips":[{"id":1,"variants":[{"title":"…","teaser":"…","post":{"title":"…","hashtags":["#…"],"description":"…","angle":"question","cta":"…","ctaType":"comment"}}]}]}',
     ].join("\n");
   }
@@ -59,6 +63,8 @@ export function variantSystemPrompt(lang: AppLang, extraCount: number): string {
       "CTA menüsü:",
       ctaMenu("tr"),
       "Aynı klibin paketleri birbirinden farklı angle kullanmalı, orijinal başlığın açısından da ayrılmalı.",
+      "Her paket ayrı bir yazma yolu izlesin (karşı-sezgi / bırakma emri / soru / sonuç farkı / dert noktası); aynı cümleyi kelime değiştirerek tekrarlamak sayılmaz.",
+      onScreenHookRules("tr"),
       `Yalnızca KESİN JSON döndür: {"clips":[{"id":1,"variants":[{"title":"...","teaser":"...","post":{...}}]}]}`,
     ].join("\n");
   }
@@ -73,6 +79,8 @@ export function variantSystemPrompt(lang: AppLang, extraCount: number): string {
     "CTA menu:",
     ctaMenu("en"),
     "Variants of one clip must use different angles from each other and from the original title.",
+    "Each package takes a different writing route (counter-intuitive / stop-doing / question / result gap / pain point) — a reworded copy of the same line does not count.",
+    onScreenHookRules("en"),
     'Output STRICT JSON only: {"clips":[{"id":1,"variants":[{"title":"…","teaser":"…","post":{…}}]}]}',
   ].join("\n");
 }
@@ -161,14 +169,22 @@ export function expandClipSpecs(
   specs: ExportClipSpec[],
   plans: Map<number, VariantPackaging[]>,
   attachPost: boolean,
-  flashDim = false
+  flashDim = false,
+  lang: AppLang = "zh"
 ): ExportClipSpec[] {
   let nextId = specs.reduce((m, s) => Math.max(m, s.id), 0) + 1;
   const out: ExportClipSpec[] = [];
   for (const spec of specs) {
     out.push(spec);
     let seq = 1; // 原版是第 1 版
-    const usable = (plans.get(spec.id) ?? []).filter((v) => v.title !== spec.title.trim());
+    // 合格性本地判定(与发布文案同一套判据):与原版或已保留的同批包装几乎
+    // 同一句话、或者角度撞车的,直接丢——变体的价值就在「真的不一样」。
+    const usable = filterDuplicatePackagings(
+      plans.get(spec.id) ?? [],
+      (v) => ({ title: v.title, angle: v.post?.angle }),
+      { title: spec.title.trim(), angle: spec.publish?.angle },
+      lang
+    );
     for (const v of usable) {
       seq++;
       out.push({

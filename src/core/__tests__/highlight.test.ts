@@ -569,6 +569,76 @@ describe("Türkçe prompt yolu", () => {
   });
 });
 
+describe("钩子写法教义与 titleFix(v0.38)", () => {
+  const zhTx = makeTranscript(["第一句话。"]);
+  const enTx: Transcript = { ...makeTranscript(["First sentence here."]), language: "en" };
+  const trTx: Transcript = {
+    engine: "test",
+    language: "tr",
+    durationSec: 4,
+    segments: [{ id: 1, startSec: 0, endSec: 4, text: "İndirim hiç gelmiyor, gerçekten.", words: [] }],
+  };
+
+  it("三语的 stage-1 系统提示词都带写法教义,英文/土耳其语块不夹中文", () => {
+    expect(highlightSystemPrompt(zhTx)).toContain("【钩子与标题:让人非点不可的写法】");
+    expect(highlightSystemPrompt(enTx)).toContain("【Hooks and titles: how to write them】");
+    expect(highlightSystemPrompt(trTx)).toContain("【Kanca ve başlık: nasıl yazılır】");
+    expect(/[一-鿿]/.test(highlightSystemPrompt(enTx))).toBe(false);
+    expect(/[一-鿿]/.test(highlightSystemPrompt(trTx))).toBe(false);
+  });
+
+  it("moment / 评审通道也带(评审是短版)", () => {
+    expect(momentSystemPrompt("zh")).toContain("【钩子与标题:让人非点不可的写法】");
+    expect(momentSystemPrompt("tr")).toContain("【Kanca ve başlık: nasıl yazılır】");
+    expect(reviewSystemPrompt(zhTx)).toContain("【悬念句写法】");
+    expect(reviewSystemPrompt(enTx)).toContain("How to write the on-screen hook");
+    expect(reviewSystemPrompt(trTx)).toContain("Merak cümlesi nasıl yazılır");
+  });
+
+  it("加了教义块也没破时长改写(档位字符串仍被替换)", () => {
+    expect(highlightSystemPrompt(zhTx)).toContain("时长 8~40 秒");
+    expect(highlightSystemPrompt(zhTx, "short")).toContain("时长 10~30 秒(硬要求,宁短勿超)");
+    expect(highlightSystemPrompt(trTx, "extended")).toContain("Süre 60–120 saniye");
+    expect(highlightSystemPrompt(enTx, "long")).toContain("Length 40–90 seconds");
+  });
+
+  it("评审的 titleFix 过了本地质检才采纳", () => {
+    const base = {
+      startSec: 0, endSec: 10, text: "", title: "今天聊聊吸水性", hook: "", reason: "",
+      boundary: "exact" as const, keywords: [], recommended: true, reviewNote: "",
+    };
+    const fixed = applyReviews(
+      [{ ...base, id: 1, score: 90 }],
+      [{ id: 1, keep: true, gate: "publish", score: 74, note: "", titleFix: "半杯水都不渗,这张纸凭什么" }],
+      "zh"
+    );
+    expect(fixed[0].title).toBe("半杯水都不渗,这张纸凭什么");
+    // 改成一个新的套话 → 不采纳,保留原标题
+    const worse = applyReviews(
+      [{ ...base, id: 1, score: 90 }],
+      [{ id: 1, keep: true, gate: "publish", score: 74, note: "", titleFix: "本视频聊聊吸水性" }],
+      "zh"
+    );
+    expect(worse[0].title).toBe("今天聊聊吸水性");
+    // 与现标题相同 / 评审没给这个字段 → 一律不动
+    const noop = applyReviews(
+      [{ ...base, id: 1, score: 90 }],
+      [{ id: 1, keep: true, gate: "publish", score: 74, note: "", titleFix: "今天聊聊吸水性" }],
+      "zh"
+    );
+    expect(noop[0].title).toBe("今天聊聊吸水性");
+    const absent = applyReviews([{ ...base, id: 1, score: 90 }], [{ id: 1, keep: true, gate: "publish", score: 74, note: "" }], "zh");
+    expect(absent[0].title).toBe("今天聊聊吸水性");
+  });
+
+  it("parseReviews 读得出 titleFix,超长截到 40 字", () => {
+    const out = parseReviews('{"reviews":[{"id":1,"keep":true,"titleFix":"半杯水都不渗,这张纸凭什么"}]}');
+    expect(out[0].titleFix).toBe("半杯水都不渗,这张纸凭什么");
+    const long = parseReviews(`{"reviews":[{"id":1,"keep":true,"titleFix":"${"差".repeat(60)}"}]}`);
+    expect(Array.from(long[0].titleFix!).length).toBe(40);
+  });
+});
+
 describe("时长档 (clip length)", () => {
   it("standard 保持原 system prompt;short/long 改写时长行(中英)", () => {
     const zh = makeTranscript(["第一句话。", "第二句话。"]);

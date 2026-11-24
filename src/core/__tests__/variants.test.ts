@@ -45,6 +45,20 @@ describe("variantSystemPrompt", () => {
     expect(p).toContain("pain = ");
     expect(p).not.toMatch(/[一-鿿]/);
   });
+
+  it("三语提示词都带悬念句写法要点与「换写法机制」要求", () => {
+    expect(variantSystemPrompt("zh", 2)).toContain("悬念句写法");
+    expect(variantSystemPrompt("zh", 2)).toContain("每版换一个写法机制");
+    expect(variantSystemPrompt("tr", 2)).toContain("Merak cümlesi nasıl yazılır");
+    expect(variantSystemPrompt("tr", 2)).toContain("Her paket ayrı bir yazma yolu izlesin");
+    expect(variantSystemPrompt("en", 2)).toContain("How to write the on-screen hook");
+    expect(variantSystemPrompt("en", 2)).toContain("Each package takes a different writing route");
+  });
+
+  it("英文提示词也不夹中文(教义块不能破例)", () => {
+    expect(variantSystemPrompt("en", 2)).not.toMatch(/[一-鿿]/);
+    expect(variantSystemPrompt("tr", 2)).not.toMatch(/[一-鿿]/);
+  });
 });
 
 describe("parseVariantPlans", () => {
@@ -141,6 +155,42 @@ describe("expandClipSpecs", () => {
 
   it("总版本数上限是 3(含原版)", () => {
     expect(VARIANT_TOTAL_MAX).toBe(3);
+  });
+
+  it("几乎同一句话的版本也被丢掉(不只看一字不差)", () => {
+    const near = new Map([
+      [1, [
+        { title: "半杯水都不渗,这张纸凭什么" },
+        { title: "半杯水都不渗!这张纸凭什么" },
+        { title: "桌上一杯水倒了三天" },
+      ]],
+    ]);
+    const out = expandClipSpecs([spec(1, "千万别被这张纸骗了")], near, true);
+    expect(out.map((s) => s.title)).toEqual(["千万别被这张纸骗了", "半杯水都不渗,这张纸凭什么", "桌上一杯水倒了三天"]);
+  });
+
+  it("与兄弟版本撞 angle 的丢掉(第三个重复首个角度)", () => {
+    const repeat = new Map([
+      [1, [
+        { title: "搬箱子别再弯腰", post: { title: "a", hashtags: [], description: "", angle: "pain" as const } },
+        { title: "三分钟测完这张纸", post: { title: "b", hashtags: [], description: "", angle: "question" as const } },
+        { title: "腰疼的人先看这条", post: { title: "c", hashtags: [], description: "", angle: "pain" as const } },
+      ]],
+    ]);
+    const out = expandClipSpecs([spec(1, "原标题")], repeat, true);
+    expect(out.map((s) => s.title)).toEqual(["原标题", "搬箱子别再弯腰", "三分钟测完这张纸"]);
+    expect(out[1].variant).toBe(2); // 丢掉的那版不占版本号/封面峰
+    expect(out[2].variant).toBe(3);
+    expect(out[2].coverRank).toBe(2);
+  });
+
+  it("原版已有 angle 时,变体不能再用同一个", () => {
+    const base: ExportClipSpec = {
+      ...spec(1, "原标题"),
+      publish: { title: "原文案", hashtags: ["#原"], description: "d", angle: "pain" },
+    };
+    const same = new Map([[1, [{ title: "搬箱子别再弯腰", post: { title: "a", hashtags: [], description: "", angle: "pain" as const } }]]]);
+    expect(expandClipSpecs([base], same, true)).toHaveLength(1);
   });
 
   it("flashDim:最后一版换开场结构(爆点闪现),其余版与原版不动", () => {

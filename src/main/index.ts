@@ -1190,7 +1190,7 @@ ipcMain.handle("hotclip:export-clips", async (event, filePath: unknown, clips: u
       },
     }));
   const exportSpecs = variantPlans
-    ? expandClipSpecs(baseSpecs, variantPlans, Boolean(pub?.llm?.baseUrl && pub.llm.model), !opts.flashForward)
+    ? expandClipSpecs(baseSpecs, variantPlans, Boolean(pub?.llm?.baseUrl && pub.llm.model), !opts.flashForward, copyLang)
     : baseSpecs;
   const exported = await exportClips(
     filePath,
