@@ -15,7 +15,7 @@ import { join, basename } from "path";
 import { transcribeCached, detectForPipeline, autoClip, analyzeReferenceVideo } from "../core/pipeline";
 import type { ReferenceProfile } from "../core/reference";
 import { loadGlossary } from "../core/glossary-store";
-import { describeSubtitleImportError } from "../shared/subtitle-import";
+import { describeSubtitleImportError, describeSubtitleRepairZh } from "../shared/subtitle-import";
 import { userDataDir, modelsRoot, cacheDir, renderCacheDir, evidenceCacheDir, llmFromEnv } from "../core/appenv";
 import { runDoctor } from "../core/doctor";
 import { ensureModel } from "../core/models";
@@ -265,6 +265,7 @@ async function main(signal?: AbortSignal): Promise<void> {
     if (args.json) process.stdout.write(`${JSON.stringify(t, null, 2)}\n`);
     else for (const s of t.segments) process.stdout.write(`[${fmtClock(s.startSec)}] ${s.text}\n`);
     if (args.subtitlePath) process.stderr.write("已导入字幕;句内字词时间为估算,请复核字幕时间与自动切点。\n");
+    if (t.subtitleRepair) process.stderr.write(`⚠ 字幕已本地修复:${describeSubtitleRepairZh(t.subtitleRepair)}\n`);
     process.stderr.write(`语言:${t.language} 时长:${fmtClock(t.durationSec)} 共 ${t.segments.length} 句\n`);
     return;
   }

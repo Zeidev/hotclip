@@ -10,7 +10,10 @@ export async function importSubtitleText(videoPath: string, text: string, format
   validateSubtitleInput(text, format);
   const media = await probeMedia(videoPath);
   signal?.throwIfAborted();
-  return parseSubtitleTranscript(text, format, media.durationSec);
+  // 导入路径一律开启本地修复:创作者手上的原稿常带重叠/倒序/零长 cue,
+  // 拒绝整份文件等于让人回去手改时间码;修复后的回执挂在 transcript 上,
+  // 由 UI / CLI / MCP 各自展示。
+  return parseSubtitleTranscript(text, format, media.durationSec, { repair: true });
 }
 
 /** Explicit sidecar only: never discover a possibly unrelated transcript. */

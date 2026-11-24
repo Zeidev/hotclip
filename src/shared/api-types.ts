@@ -114,6 +114,24 @@ export interface Transcript {
   /** Engine id that produced this (e.g. "sensevoice-local"). */
   engine: string;
   durationSec: number;
+  /**
+   * What the local subtitle-import repair had to change (overlapping,
+   * backwards, zero-length or out-of-order cues). Absent when the imported
+   * file needed no repair, which is also the case for every ASR transcript.
+   */
+  subtitleRepair?: SubtitleRepairReport;
+}
+
+/** Deterministic, keyless repair receipt for an imported subtitle track. */
+export interface SubtitleRepairReport {
+  /** Cues read from the file, before repair. */
+  cues: number;
+  /** Cues whose start/end moved (trimmed, swapped or given a window). */
+  repaired: number;
+  /** Cues dropped because repair left them no time at all. */
+  dropped: number;
+  /** Cues arrived out of chronological order and were re-sorted by time. */
+  reordered: boolean;
 }
 
 export type TranscribeStage =

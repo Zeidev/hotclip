@@ -11,6 +11,7 @@ import { useT } from "../../i18n/store";
 import { getApi } from "../../api/provider";
 import { useSession } from "../../stores/session-store";
 import { editSegmentText } from "../../../../shared/edit-transcript";
+import { subtitleRepairNotice } from "../../../../shared/subtitle-import";
 import { summarizeTimingQuality } from "../../../../shared/transcript-quality";
 import { searchVisualEvidence, type VisualEvidenceNote } from "../../../../shared/evidence-search";
 import { evidenceContext, evidenceResults, nextEvidenceIndex, type EvidenceSource } from "../../../../shared/evidence-navigation";
@@ -206,6 +207,9 @@ export function TranscriptPanel({ transcript, visualNotes, onSeek, onAudition, o
       {transcript.engine.startsWith("subtitle-") && (
         <p className="shrink-0 border-b border-line/60 px-3 py-2 text-xs leading-relaxed text-mut">
           {t("subtitleImported")}
+          {transcript.subtitleRepair && (
+            <span className="mt-0.5 block text-amber-400">{subtitleRepairNotice(transcript.subtitleRepair, t)}</span>
+          )}
         </p>
       )}
       {pending && (

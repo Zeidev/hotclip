@@ -20,6 +20,7 @@ import { loadPerformanceMemory } from "../core/performance-memory";
 import { handleMcpMessage, type JsonRpcMessage } from "./protocol";
 import { parseGenre } from "../core/genre";
 import { isClipLength, MAX_CLIPS, normalizePromptLang } from "../shared/detection-options";
+import { describeSubtitleRepairZh } from "../shared/subtitle-import";
 
 function fmtClock(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -63,7 +64,8 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     const t = await transcribeCached(videoPath, modelsRoot(), cacheDir(), await loadGlossary(userDataDir()), undefined, typeof args.subtitlePath === "string" ? args.subtitlePath : undefined, { engineId: typeof args.engineId === "string" ? args.engineId : undefined, language: typeof args.language === "string" ? args.language : undefined, localServiceUrl: typeof args.localServiceUrl === "string" ? args.localServiceUrl : undefined, restart: args.restart === true });
     const lines = t.segments.map((s) => `[${fmtClock(s.startSec)}] ${s.text}`).join("\n");
     const capped = lines.length > 60_000 ? `${lines.slice(0, 60_000)}\n…(截断)` : lines;
-    return `来源:${t.engine} 语言:${t.language} 时长:${fmtClock(t.durationSec)} 共 ${t.segments.length} 句\n${args.subtitlePath ? "已导入字幕;句内字词时间为估算,需复核。\n" : ""}${capped}`;
+    const repairNote = t.subtitleRepair ? `⚠ 字幕已本地修复:${describeSubtitleRepairZh(t.subtitleRepair)}\n` : "";
+    return `来源:${t.engine} 语言:${t.language} 时长:${fmtClock(t.durationSec)} 共 ${t.segments.length} 句\n${args.subtitlePath ? "已导入字幕;句内字词时间为估算,需复核。\n" : ""}${repairNote}${capped}`;
   }
 
   if (name === "detect_highlights") {

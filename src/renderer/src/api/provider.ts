@@ -347,7 +347,8 @@ const browserMock: HotClipApi = {
     return applyGlossaryToTranscript(mockTranscript(), mockGlossaryLoad()).transcript;
   },
   async importSubtitle(_filePath, text, format) {
-    return parseSubtitleTranscript(text, format, MOCK_MEDIA.durationSec);
+    // 与主进程同款:导入路径开启本地修复(重叠/倒序/零长 cue)
+    return parseSubtitleTranscript(text, format, MOCK_MEDIA.durationSec, { repair: true });
   },
   onTranscribeProgress(cb) {
     progressListeners.add(cb);
