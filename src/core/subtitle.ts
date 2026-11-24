@@ -436,8 +436,8 @@ export interface CaptionOptions extends CaptionReadabilityOptions {
    * 渲染为主字幕下方的小号 Trans 轨。
    */
   translation?: Array<{ startSec: number; endSec: number; text: string }>;
-  /** AIGC 显式标识:左上角小字「AI 生成」全程可见(《标识办法》显式标识)。 */
-  aigcBadge?: { durationSec: number };
+  /** AIGC 显式标识:左上角小字全程可见(《标识办法》显式标识);text 缺省中文「AI 生成」。 */
+  aigcBadge?: { durationSec: number; text?: string };
   /**
    * 说话人标签(v0.14):多说话人切片换人时行首加彩色「A:」标签,
    * 对谈静音观看不迷路。只在词表带 ≥2 个说话人标注时生效。
@@ -713,7 +713,7 @@ export function buildCaptionAss(
 
   // AIGC 显式标识:左上角全程小字(layer 3,压在所有轨之上)
   if (options.aigcBadge && options.aigcBadge.durationSec > 0) {
-    events.push(`Dialogue: 3,${toAssTime(0)},${toAssTime(options.aigcBadge.durationSec)},Aigc,,0,0,0,,AI 生成`);
+    events.push(`Dialogue: 3,${toAssTime(0)},${toAssTime(options.aigcBadge.durationSec)},Aigc,,0,0,0,,${options.aigcBadge.text ?? "AI 生成"}`);
   }
 
   // 双语译文轨:整句级 Dialogue,时间与 words 同基(同样被 clipStartSec 平移);

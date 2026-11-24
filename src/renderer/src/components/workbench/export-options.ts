@@ -6,6 +6,7 @@
 import type { RenderToggles, LlmConfig, Transcript } from "../../../../shared/api-types";
 import type { RenderPrefs } from "../../stores/render-prefs-store";
 import { activeBrandStyle } from "../../stores/brand-store";
+import { useLocaleStore } from "../../i18n/store";
 
 export function buildRenderToggles(opts: {
   prefs: RenderPrefs;
@@ -20,6 +21,10 @@ export function buildRenderToggles(opts: {
   // 中文源译英,其余译中——短视频出海/引进的两个主方向
   const targetLang = (transcript?.language || "").startsWith("zh") ? "en" : "zh";
   return {
+    // 界面语言:只管 AIGC 标识/发布包目录名/manifest 备注这些写给创作者的产物
+    locale: useLocaleStore.getState().locale,
+    // 文案与变体包装的语言:与检测参数同口径(auto 按转写判定,可显式钉死)
+    promptLang: prefs.promptLang,
     vertical: prefs.vertical,
     captionStyle: prefs.captionStyle,
     jumpCut: prefs.jumpCut,

@@ -8,6 +8,7 @@
  * 变体,绝不拖垮导出。展开逻辑(计划 → 追加的导出 spec)是纯函数可单测。
  */
 import type { LlmConfig } from "../shared/api-types";
+import type { AppLang } from "../shared/ui-lang";
 import { stripThinkBlocks } from "./highlight/prefilter";
 import { hookAngleMenu, ctaMenu } from "./copy-templates";
 import { parsePostFields, publishUserPrompt, type PublishCopy, type PublishSource, type PublishChatFn } from "./publish";
@@ -30,8 +31,8 @@ export interface VariantPackaging {
   post?: PublishCopy;
 }
 
-export function variantSystemPrompt(zh: boolean, extraCount: number): string {
-  if (zh) {
+export function variantSystemPrompt(lang: AppLang, extraCount: number): string {
+  if (lang === "zh") {
     return [
       "你是短视频运营。同一条切片要发多个账号,每个账号要一版差异化包装——不是同义改写,是换一个钩子角度重新包装同一段内容。",
       `为每条切片在原版之外再给 ${extraCount} 套包装,每套输出:`,
@@ -39,11 +40,26 @@ export function variantSystemPrompt(zh: boolean, extraCount: number): string {
       "teaser=开场悬念句(≤18字,大字压在开头;想不出贴切的就省略这个字段);",
       "post=发布文案对象:{title:发布标题≤30字, hashtags:3-6个带#话题, description:≤60字简介, cta:≤20字行动号召, angle/ctaType:从菜单选}。",
       "钩子角度菜单:",
-      hookAngleMenu(true),
+      hookAngleMenu("zh"),
       "CTA 菜单:",
-      ctaMenu(true),
+      ctaMenu("zh"),
       "同一条切片的各版必须用不同 angle,与原版标题的角度也要错开。",
       '严格只输出 JSON:{"clips":[{"id":1,"variants":[{"title":"…","teaser":"…","post":{"title":"…","hashtags":["#…"],"description":"…","angle":"question","cta":"…","ctaType":"comment"}}]}]}',
+    ].join("\n");
+  }
+  if (lang === "tr") {
+    return [
+      "Kısa video sosyal medya yöneticisisin. Aynı klip birden çok hesapta yayınlanıyor; her hesap kendine ayrı bir paket istiyor — eşanlamlı yeniden yazım değil, aynı içeriği başka bir kanca açısıyla yeniden paketlemek.",
+      `Her klip için orijinalin yanında ${extraCount} ek paket ver. Her paket şunları üretsin:`,
+      "title = videoya gömülen başlık kartı (≤ 40 karakter, açı mutlaka değişsin, sadece kelime değiştirmek yetmez);",
+      "teaser = açılış merak cümlesi (≤ 36 karakter, başta büyük yazı; uygun bir şey bulamazsan bu alanı hiç yazma);",
+      "post = yayın metni nesnesi: {title ≤ 60 karakter, hashtags: # ile 3-6 etiket, description ≤ 120 karakter, cta ≤ 40 karakter, angle/ctaType menüden}.",
+      "Kanca açısı menüsü:",
+      hookAngleMenu("tr"),
+      "CTA menüsü:",
+      ctaMenu("tr"),
+      "Aynı klibin paketleri birbirinden farklı angle kullanmalı, orijinal başlığın açısından da ayrılmalı.",
+      `Yalnızca KESİN JSON döndür: {"clips":[{"id":1,"variants":[{"title":"...","teaser":"...","post":{...}}]}]}`,
     ].join("\n");
   }
   return [
@@ -53,9 +69,9 @@ export function variantSystemPrompt(zh: boolean, extraCount: number): string {
     "teaser = opening hook line (≤ 36 chars; omit the field if nothing fits);",
     "post = post copy object: {title ≤ 60 chars, hashtags: 3-6 with #, description ≤ 120 chars, cta ≤ 40 chars, angle/ctaType from the menus}.",
     "Hook angle menu:",
-    hookAngleMenu(false),
+    hookAngleMenu("en"),
     "CTA menu:",
-    ctaMenu(false),
+    ctaMenu("en"),
     "Variants of one clip must use different angles from each other and from the original title.",
     'Output STRICT JSON only: {"clips":[{"id":1,"variants":[{"title":"…","teaser":"…","post":{…}}]}]}',
   ].join("\n");
@@ -101,7 +117,7 @@ export function parseVariantPlans(
 export async function generateVariantPlans(
   sources: PublishSource[],
   totalCount: number,
-  zh: boolean,
+  lang: AppLang,
   llm: LlmConfig,
   chat: PublishChatFn,
   signal?: AbortSignal
@@ -109,8 +125,8 @@ export async function generateVariantPlans(
   const extra = Math.min(totalCount, VARIANT_TOTAL_MAX) - 1;
   if (sources.length === 0 || extra < 1) return null;
   const validIds = new Set(sources.map((s) => s.id));
-  const system = variantSystemPrompt(zh, extra);
-  const user = publishUserPrompt(sources);
+  const system = variantSystemPrompt(lang, extra);
+  const user = publishUserPrompt(sources, lang);
   try {
     const timeout = AbortSignal.timeout(VARIANTS_TIMEOUT_MS);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;

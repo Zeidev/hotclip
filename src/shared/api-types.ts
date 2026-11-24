@@ -542,6 +542,17 @@ export const QUALITY_CRF: Record<ExportQuality, number> = {
 
 /** Render options for the export step (UI toggles on the highlight list). */
 export interface ExportOptions {
+  /**
+   * 界面语言(renderer 传入的 locale)。只管写给创作者看的产物——画面里的
+   * AIGC 标识、.post.txt 的提醒、发布包目录名与 manifest 备注;缺省按中文,
+   * CLI/MCP 不传,输出与历史一致。发布文案语言看 promptLang/转写,不看这里。
+   */
+  locale?: string;
+  /**
+   * 发布文案与变体包装的语言(与检测参数同口径):auto(缺省)按转写语言判定,
+   * zh/tr/en 显式钉死。修掉「tr 转写被当 zh,文案出中文」的老行为。
+   */
+  promptLang?: PromptLangChoice;
   /** Center-crop reframe to 9:16 vertical (1080×1920) — short-video ready. */
   vertical: boolean;
   /** Caption style to burn into the picture. */

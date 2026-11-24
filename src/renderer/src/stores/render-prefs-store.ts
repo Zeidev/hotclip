@@ -8,6 +8,7 @@ import type { CaptionStyleChoice, ClipLength, ExportQuality, PromptLangChoice } 
 import { validPlatformIds } from "../../../shared/platform-specs";
 import { DEFAULT_MAX_CLIPS, isClipLength, normalizeMaxClips, normalizePromptLang } from "../../../shared/detection-options";
 import { DEFAULT_SENSITIVE_WORDS, sanitizeSensitiveWords } from "../../../core/sensitive-words";
+import { detectLocale } from "../i18n/messages";
 
 const STORAGE_KEY = "hotclip-render-prefs";
 
@@ -93,6 +94,11 @@ export interface RenderPrefs {
 }
 
 /** 与出厂默认一致:开箱即出竖屏卡拉OK跳剪片;花钱/额外文件的默认关。 */
+/** 出厂发布包平台:中文界面给中文矩阵三件套,其余语言给国际三件套。 */
+function defaultPackPlatforms(): string[] {
+  return detectLocale() === "zh" ? ["douyin", "xiaohongshu", "channels"] : ["tiktok", "shorts", "reels"];
+}
+
 export const RENDER_PREF_DEFAULTS: RenderPrefs = {
   vertical: true,
   captionStyle: "keyword",
@@ -130,7 +136,9 @@ export const RENDER_PREF_DEFAULTS: RenderPrefs = {
   evidencePack: false, // 留证段占磁盘(每条约 6 分钟源片),默认关按需开
   publishPack: false, // 发布包产生一堆文件夹,默认关由用户按需开
   seriesPack: false, // 只有同场多条同主题时有意义,默认关
-  packPlatforms: ["douyin", "xiaohongshu", "channels"], // 中文矩阵最常见的三件套
+  // 出厂平台按界面语言给:中文矩阵抖音/小红书/视频号,其余走 TikTok/Shorts/Reels
+  // (土耳其语创作者默认拿到抖音/小红书毫无用处,还多几个发不出去的文件夹)
+  packPlatforms: defaultPackPlatforms(),
   variants: 1, // 多版=多倍导出时间+一次 LLM 调用,默认关
   clipLength: "standard",
   maxClips: DEFAULT_MAX_CLIPS,

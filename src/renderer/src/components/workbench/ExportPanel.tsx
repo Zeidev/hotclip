@@ -9,7 +9,7 @@ import { getApi } from "../../api/provider";
 import { useRenderPrefs } from "../../stores/render-prefs-store";
 import { useLlmStore } from "../../stores/llm-store";
 import { useSchemes, BUILTIN_SCHEMES, matchesScheme, schemeLabel } from "../../stores/scheme-store";
-import { PLATFORM_SPECS } from "../../../../shared/platform-specs";
+import { localized, PLATFORM_SPECS } from "../../../../shared/platform-specs";
 import { ModalShell, SectionLabel, Segmented, SwitchRow } from "../ui";
 import type { CaptionStyleChoice } from "../../../../shared/api-types";
 
@@ -316,7 +316,7 @@ export function ExportPanel({
                     <button
                       key={p.id}
                       type="button"
-                      title={p.noteZh}
+                      title={localized(p.note, lang)}
                       onClick={() =>
                         setPref({ packPlatforms: on ? prefs.packPlatforms.filter((x) => x !== p.id) : [...prefs.packPlatforms, p.id] })
                       }
@@ -324,7 +324,7 @@ export function ExportPanel({
                         on ? "border-ember/60 bg-ember/10 text-fg" : "text-mut hover:text-fg"
                       }`}
                     >
-                      {lang === "zh" ? p.name.zh : p.name.en}
+                      {localized(p.name, lang)}
                     </button>
                   );
                 })}

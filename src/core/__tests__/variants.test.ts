@@ -32,10 +32,18 @@ const PLAN_JSON = JSON.stringify({
 
 describe("variantSystemPrompt", () => {
   it("中文提示词讲清「换角度不是改写」并带角度菜单与份数", () => {
-    const p = variantSystemPrompt(true, 2);
+    const p = variantSystemPrompt("zh", 2);
     expect(p).toContain("2 套");
     expect(p).toContain("question=提问式");
     expect(p).toContain("不是同义改写");
+  });
+
+  it("土耳其语提示词不夹中文,角度菜单也是土耳其语", () => {
+    const p = variantSystemPrompt("tr", 2);
+    expect(p).toContain("Kısa video sosyal medya yöneticisisin");
+    expect(p).toContain("2 ek paket");
+    expect(p).toContain("pain = ");
+    expect(p).not.toMatch(/[一-鿿]/);
   });
 });
 
@@ -74,7 +82,7 @@ describe("parseVariantPlans", () => {
     const out = await generateVariantPlans(
       [{ id: 1, title: "原标题", hook: "h", text: "t", keywords: [] }],
       3,
-      true,
+      "zh",
       { baseUrl: "http://x", apiKey: "k", model: "m" },
       chat
     );
@@ -86,7 +94,7 @@ describe("parseVariantPlans", () => {
     const out = await generateVariantPlans(
       [{ id: 1, title: "t", hook: "h", text: "t", keywords: [] }],
       2,
-      true,
+      "en",
       { baseUrl: "http://x", apiKey: "k", model: "m" },
       async () => "不是JSON"
     );

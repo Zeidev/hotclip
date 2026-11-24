@@ -32,6 +32,7 @@ import { isModelInstalled, ensureModel, SENSEVOICE_MODEL, PARAFORMER_MODEL, FIRE
 import { runDiarization, labelTranscript } from "@core/diarize";
 import { ASR_CATALOG } from "../shared/asr-catalog";
 import { detectHighlights, chatComplete } from "@core/highlight/detect";
+import { promptLanguage } from "@core/highlight/prompt";
 import { listModels } from "@core/llm-models";
 import { reviewCandidatesVision } from "@core/highlight/review-vision";
 import { composeContactSheetJpeg } from "@core/contact-sheet";
@@ -41,6 +42,7 @@ import { generatePublishCopies } from "@core/publish";
 import { generateVariantPlans, expandClipSpecs, VARIANT_TOTAL_MAX } from "@core/variants";
 import { generateAiBgm } from "@core/bgm-ai";
 import { validPlatformIds } from "../shared/platform-specs";
+import { uiLang, type AppLang } from "../shared/ui-lang";
 import { FolderWatcher, isVideoFile, isSeen, type SeenMap, type WatchedFile } from "@core/watch";
 import { startWebhookServer, type WebhookServerHandle } from "@core/webhook";
 import { collectDanmakuSignal, readDanmakuItems, danmakuHeatCurve } from "@core/danmaku";
@@ -1121,14 +1123,19 @@ ipcMain.handle("hotclip:export-clips", async (event, filePath: unknown, clips: u
     translations = await optionalExportStep(abortSignal, () => translateSegments(translatable, tr.targetLang, tr.llm, chatComplete, abortSignal));
   }
   // 发布文案(可选):一次 LLM 批量为所有切片生成标题+话题+简介(fail-open)。
-  const zh = !(opts.transcript?.language ?? "zh").startsWith("en");
+  // 文案语言跟随成片语言(转写判定,用户在检测参数里可显式钉死 zh/tr/en);
+  // 没有转写(纯手动切片)时退回界面语言。旧代码把 tr 当成 zh,土耳其语
+  // 转写会拿到中文文案。
+  const copyLang: AppLang = opts.transcript
+    ? promptLanguage(opts.transcript, opts.promptLang)
+    : uiLang(opts.locale);
   // saveWorthy:实用密度达线的候选(v0.14),发布文案转收藏/搜索导向
   const copySources = list.map((c) => ({ id: c.id, title: c.title, hook: c.hook, text: c.text, keywords: c.keywords, saveWorthy: Boolean(c.utility) }));
   let publishCopies: Map<number, import("@core/publish").PublishCopy> | null = null;
   const pub = opts.publishCopy;
   if (pub?.llm?.baseUrl && pub.llm.model) {
     preparing("publish");
-    publishCopies = await optionalExportStep(abortSignal, () => generatePublishCopies(copySources, zh, pub.llm, chatComplete, abortSignal));
+    publishCopies = await optionalExportStep(abortSignal, () => generatePublishCopies(copySources, copyLang, pub.llm, chatComplete, abortSignal));
   }
   // 一片多版(可选):一次 LLM 为整批切片生成差异化包装计划(fail-open——
   // 失败只是没有变体,原版照常导出)。
@@ -1139,7 +1146,7 @@ ipcMain.handle("hotclip:export-clips", async (event, filePath: unknown, clips: u
     variantPlans = await optionalExportStep(abortSignal, () => generateVariantPlans(
       copySources,
       Math.min(Number(varOpt.count), VARIANT_TOTAL_MAX),
-      zh,
+      copyLang,
       varOpt.llm,
       chatComplete,
       abortSignal
@@ -1192,6 +1199,8 @@ ipcMain.handle("hotclip:export-clips", async (event, filePath: unknown, clips: u
     exportSpecs,
     outDir,
     {
+      // 界面语言:画面里的 AIGC 标识、.post.txt 提醒、发布包目录名的语言
+      locale: opts.locale,
       vertical: Boolean(opts.vertical),
       captionStyle: style,
       jumpCut,
@@ -1241,7 +1250,7 @@ ipcMain.handle("hotclip:export-clips", async (event, filePath: unknown, clips: u
       // AI 封面双档(v0.14):透传用户 LLM 档的 Atlas Key,导出层判端点可用性
       aiCover:
         opts.aiCover?.llm?.baseUrl && opts.aiCover.llm.apiKey && (opts.aiCover.tier === "volume" || opts.aiCover.tier === "premium")
-          ? { tier: opts.aiCover.tier, baseUrl: opts.aiCover.llm.baseUrl, apiKey: opts.aiCover.llm.apiKey, zh }
+          ? { tier: opts.aiCover.tier, baseUrl: opts.aiCover.llm.baseUrl, apiKey: opts.aiCover.llm.apiKey, zh: copyLang === "zh" }
           : undefined,
       // 平台发布包:未知平台 id 直接过滤(不猜),空清单等于没开
       publishPack: Array.isArray(opts.publishPack) ? validPlatformIds(opts.publishPack.filter((p): p is string => typeof p === "string")) : undefined,

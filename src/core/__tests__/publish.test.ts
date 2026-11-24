@@ -18,11 +18,20 @@ const SOURCES: PublishSource[] = [
 
 describe("publishUserPrompt", () => {
   it("素材逐条成段,正文截断到 300 字", () => {
-    const p = publishUserPrompt(SOURCES);
+    const p = publishUserPrompt(SOURCES, "zh");
     expect(p).toContain("[1] 片名:半杯水都不渗 钩子:你看这个吸水速度 关键词:吸水速度");
     expect(p).toContain("[2]");
     const line1 = p.split("\n\n")[0];
     expect(line1.length).toBeLessThan(400);
+  });
+
+  it("土耳其语素材块用土耳其语字段名(不再夹中文标签)", () => {
+    const p = publishUserPrompt(SOURCES, "tr");
+    expect(p).toContain("Klip adı:半杯水都不渗");
+    expect(p).toContain("Kanca:");
+    expect(p).toContain("Anahtar kelimeler:吸水速度");
+    expect(p).not.toContain("片名:");
+    expect(p).not.toContain("钩子:");
   });
 });
 
@@ -76,7 +85,7 @@ describe("generatePublishCopies", () => {
       expect(user).toContain("[1] 片名:半杯水都不渗");
       return '{"posts":[{"id":1,"title":"A","hashtags":["#x"],"description":"d"},{"id":2,"title":"B"}]}';
     };
-    const map = await generatePublishCopies(SOURCES, true, LLM, chat);
+    const map = await generatePublishCopies(SOURCES, "zh", LLM, chat);
     expect(map?.size).toBe(2);
   });
 
@@ -85,17 +94,34 @@ describe("generatePublishCopies", () => {
       expect(system).toContain("social manager");
       return '{"posts":[{"id":1,"title":"A"}]}';
     };
-    await generatePublishCopies(SOURCES, false, LLM, chat);
+    await generatePublishCopies(SOURCES, "en", LLM, chat);
+  });
+
+  it("土耳其语素材走土耳其语提示词(修掉「tr 当 zh 出中文文案」)", async () => {
+    let seenSystem = "";
+    let seenUser = "";
+    const chat: PublishChatFn = async (_llm, system, user) => {
+      seenSystem = system;
+      seenUser = user;
+      return '{"posts":[{"id":1,"title":"A"}]}';
+    };
+    const map = await generatePublishCopies(SOURCES, "tr", LLM, chat);
+    expect(map?.size).toBe(1);
+    expect(seenSystem).toContain("Kısa video sosyal medya yöneticisisin");
+    expect(seenSystem).toContain("kanca açısı menüsünden");
+    expect(seenSystem).toContain("pain = ");
+    expect(seenSystem).not.toMatch(/[一-鿿]/);
+    expect(seenUser).toContain("Klip adı:");
   });
 
   it("端点失败/解析为空 → fail-open null;上游取消上抛", async () => {
-    expect(await generatePublishCopies(SOURCES, true, LLM, async () => { throw new Error("down"); })).toBeNull();
-    expect(await generatePublishCopies(SOURCES, true, LLM, async () => "垃圾")).toBeNull();
-    expect(await generatePublishCopies([], true, LLM, async () => "{}")).toBeNull();
+    expect(await generatePublishCopies(SOURCES, "zh", LLM, async () => { throw new Error("down"); })).toBeNull();
+    expect(await generatePublishCopies(SOURCES, "zh", LLM, async () => "垃圾")).toBeNull();
+    expect(await generatePublishCopies([], "zh", LLM, async () => "{}")).toBeNull();
     const ac = new AbortController();
     ac.abort();
     await expect(
-      generatePublishCopies(SOURCES, true, LLM, async () => { throw new Error("aborted"); }, ac.signal)
+      generatePublishCopies(SOURCES, "zh", LLM, async () => { throw new Error("aborted"); }, ac.signal)
     ).rejects.toThrow();
   });
 });
@@ -111,5 +137,15 @@ describe("postTextFile", () => {
       "T\n\nD\n关注我下期拆解\n"
     );
     expect(postTextFile({ title: "T", hashtags: [], description: "", cta: "收藏慢慢看" })).toBe("T\n\n收藏慢慢看\n");
+  });
+
+  it("AIGC 提醒跟界面语言走;缺省仍是中文(CLI/MCP 输出不变)", () => {
+    const copy = { title: "T", hashtags: [], description: "D" };
+    expect(postTextFile(copy, true)).toContain("【AIGC 标注】");
+    expect(postTextFile(copy, true, "zh")).toContain("【AIGC 标注】");
+    expect(postTextFile(copy, true, "tr")).toContain("[AIGC beyanı]");
+    expect(postTextFile(copy, true, "en")).toContain("[AIGC label]");
+    // 没开 AIGC 标识就一行都不加
+    expect(postTextFile(copy, false, "tr")).toBe("T\n\nD\n");
   });
 });

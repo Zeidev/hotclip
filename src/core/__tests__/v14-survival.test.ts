@@ -119,10 +119,18 @@ describe("分发台账 CSV", () => {
 describe("AIGC 平台文案", () => {
   it("发布包文案开 AIGC 时附平台操作提示", () => {
     const spec = platformSpec("douyin")!;
-    const withNote = adaptPost("标题", undefined, spec, true);
+    const withNote = adaptPost("标题", undefined, spec, true, "zh");
     expect(withNote.text).toContain("【AIGC 标注】");
     expect(withNote.text).toContain("内容由AI生成");
     expect(adaptPost("标题", undefined, spec, false).text).not.toContain("AIGC");
+  });
+  it("发布包 AIGC 提示跟语言走(缺省 zh 不变)", () => {
+    const spec = platformSpec("douyin")!;
+    const tr = adaptPost("标题", undefined, spec, true, "tr");
+    expect(tr.text).toContain("[AIGC beyanı]");
+    expect(tr.text).toContain("AI ile üretildi");
+    expect(tr.text).not.toContain("【AIGC 标注】");
+    expect(adaptPost("标题", undefined, spec, true).text).toContain("【AIGC 标注】");
   });
   it(".post.txt 开 AIGC 时附通用声明", () => {
     const copy = { title: "t", hashtags: [], description: "d" };
@@ -133,13 +141,15 @@ describe("AIGC 平台文案", () => {
 
 describe("发布文案收藏/搜索导向", () => {
   it("system prompt 带 2026 算法要点;可收藏源打标进 user prompt", () => {
-    expect(publishSystemPrompt(true)).toContain("收藏");
-    expect(publishSystemPrompt(true)).toContain("搜索");
-    expect(publishSystemPrompt(false)).toContain("save-worthy");
+    expect(publishSystemPrompt("zh")).toContain("收藏");
+    expect(publishSystemPrompt("zh")).toContain("搜索");
+    expect(publishSystemPrompt("en")).toContain("save-worthy");
+    // 土耳其语稿同样带 2026 算法口径,不是英文照搬
+    expect(publishSystemPrompt("tr")).toContain("Kaydetme ve arama");
     const u = publishUserPrompt([
       { id: 1, title: "t", hook: "h", text: "x", keywords: [], saveWorthy: true },
       { id: 2, title: "t2", hook: "h2", text: "y", keywords: [] },
-    ]);
+    ], "zh");
     expect(u).toContain("[1] [可收藏]");
     expect(u).not.toContain("[2] [可收藏]");
   });
