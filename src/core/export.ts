@@ -18,6 +18,7 @@ import { planColdOpen, planFlashForward, FLASH_SKIP_NEAR_START_SEC } from "./col
 import { computeJumpCut, BREATH_PAD_SEC } from "./gaps";
 import { perturbLayout } from "../shared/perturb";
 import { clampTranslationLines, remapTranslationLines, type TranslationLine } from "./translate";
+import { AIGC_BADGE_TEXT, uiLang } from "../shared/ui-lang";
 import { postTextFile, type PublishCopy } from "./publish";
 import { buildPublishPacks, coverFilter, type PackSummary } from "./publish-pack";
 import { buildSeriesPack, type SeriesPackSummary } from "./series-pack";
@@ -325,7 +326,16 @@ async function bgmBeatGrid(path: string, signal?: AbortSignal): Promise<number[]
   return onsets.length > 0 ? onsets : undefined;
 }
 
-export interface ExportRenderOptions {  /** Center-crop reframe to 9:16 (1080×1920). */
+export interface ExportRenderOptions {
+  /**
+   * UI locale: language of the creator-facing artifacts export writes (the AIGC
+   * badge burned into the picture, the .post.txt reminder, publish-pack folder
+   * names and manifest notes). Unset reads as Chinese, which keeps CLI/MCP
+   * output byte-identical. Publish copy language is a different thing and
+   * follows the transcript — see core/highlight/prompt.ts.
+   */
+  locale?: string;
+  /** Center-crop reframe to 9:16 (1080×1920). */
   vertical?: boolean;
   /** Caption style to burn in (clips must carry `words`); omit for none. */
   captionStyle?: CaptionStyle | WebCaptionStyle;
@@ -898,7 +908,7 @@ export async function exportClips(
             openingHook,
             highlightHex: options.brand?.highlightColor,
             translation: transLines.length > 0 ? transLines : undefined,
-            aigcBadge: options.aigcLabel ? { durationSec: clipDuration } : undefined,
+            aigcBadge: options.aigcLabel ? { durationSec: clipDuration, text: AIGC_BADGE_TEXT[uiLang(options.locale)] } : undefined,
             speakerLabels: options.speakerLabels,
           }
         );
@@ -1239,7 +1249,7 @@ export async function exportClips(
                 titleCard: options.titleCard ? { text: clip.title, durationSec: miniDur } : undefined,
                 openingHook: openingHook ? { text: openingHook.text, durationSec: Math.min(OPENING_HOOK_SEC, miniDur) } : undefined,
                 highlightHex: options.brand?.highlightColor,
-                aigcBadge: options.aigcLabel ? { durationSec: miniDur } : undefined,
+                aigcBadge: options.aigcLabel ? { durationSec: miniDur, text: AIGC_BADGE_TEXT[uiLang(options.locale)] } : undefined,
                 speakerLabels: options.speakerLabels,
               });
               await writeFile(miniAssPath, miniAss, "utf8");
@@ -1512,7 +1522,7 @@ export async function exportClips(
 
       // 发布文案:mp4 旁落同名 .post.txt(标题+话题+简介,直接全选复制)
       if (clip.publish) {
-        await writeFile(outPath.replace(/\.mp4$/, ".post.txt"), postTextFile(clip.publish, Boolean(options.aigcLabel)), "utf8").catch(() => {});
+        await writeFile(outPath.replace(/\.mp4$/, ".post.txt"), postTextFile(clip.publish, Boolean(options.aigcLabel), uiLang(options.locale)), "utf8").catch(() => {});
       }
 
       results.push({
@@ -1689,7 +1699,7 @@ export async function exportClips(
           ["-hide_banner", "-v", "error", "-i", src, "-vf", coverFilter(spec), "-frames:v", "1", "-q:v", "2", "-y", dest],
           { maxBuffer: 8 * 1024 * 1024 }
         ).then(() => true, () => false);
-      }, Boolean(options.aigcLabel)).catch(() => []);
+      }, Boolean(options.aigcLabel), uiLang(options.locale)).catch(() => []);
     }
 
     // 留证包(v0.14 可选):每条切片截源片前后各 3 分钟流复制留档——2026-07

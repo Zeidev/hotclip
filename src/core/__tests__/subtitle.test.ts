@@ -390,6 +390,13 @@ describe("AIGC 显式标识 (Aigc badge)", () => {
     expect(buildCaptionAss([], 0, VERTICAL_LAYOUT, "karaoke", {})).not.toContain(",Aigc,");
     expect(buildCaptionAss([], 0, VERTICAL_LAYOUT, "karaoke", { aigcBadge: { durationSec: 0 } })).not.toContain("Dialogue: 3");
   });
+
+  it("标识文案跟语言走(缺省中文,土耳其语/英语各说各的)", () => {
+    const tr = buildCaptionAss([], 0, VERTICAL_LAYOUT, "karaoke", { aigcBadge: { durationSec: 5, text: "AI ile üretildi" } });
+    expect(tr).toContain("Aigc,,0,0,0,,AI ile üretildi");
+    const en = buildCaptionAss([], 0, VERTICAL_LAYOUT, "karaoke", { aigcBadge: { durationSec: 5, text: "AI-generated" } });
+    expect(en).toContain("Aigc,,0,0,0,,AI-generated");
+  });
 });
 
 describe("caption font follows the script", () => {

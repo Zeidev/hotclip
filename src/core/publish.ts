@@ -8,6 +8,8 @@
  * 导出。纯函数(prompt/解析/成文)可单测;LLM 调用注入。
  */
 import type { LlmConfig } from "../shared/api-types";
+import type { AppLang } from "../shared/ui-lang";
+import { AIGC_POST_NOTE } from "../shared/ui-lang";
 import { stripThinkBlocks } from "./highlight/prefilter";
 import { ctaMenu, hookAngleMenu, isCtaType, isHookAngle, type CtaTypeId, type HookAngleId } from "./copy-templates";
 
@@ -48,40 +50,65 @@ export const PUBLISH_TIMEOUT_MS = 90_000;
 const TEXT_EXCERPT_CHARS = 300;
 const MAX_HASHTAGS = 6;
 
-export function publishSystemPrompt(zh: boolean): string {
-  if (zh) {
+export function publishSystemPrompt(lang: AppLang): string {
+  if (lang === "zh") {
     return [
       "你是短视频运营,为每条切片写发布文案(抖音/小红书/视频号通用)。",
       "每条输出:title=发布标题(≤30字,别用片名原文照抄)。下笔前先从钩子角度菜单里挑最贴合内容的一个,整批切片换着用,别全走同一个套路:",
-      hookAngleMenu(true),
+      hookAngleMenu("zh"),
       // 2026 算法对齐:收藏率与搜索权重最高——标题埋观众会搜的词,干货片 CTA 转收藏/合集
       "【2026 算法要点】平台现在收藏率与搜索权重最高:标题优先写成「观众会在搜索框里打的问题/关键词句式」(把片内的具体名词/数字埋进标题,不要只写情绪词);标了[可收藏]的干货片,ctaType 必须选 save,CTA 引导「收藏起来」或「更多同场内容看主页合集」,标题走干货句式。",
       "hashtags=3-6 个话题标签(带#,垂类词优先,泛词最多1个);",
       "description=一两句简介(补充钩子或语境,≤60字,不要堆表情);",
       "cta=一句收尾行动号召(≤20字),类型从菜单里挑与内容匹配的:",
-      ctaMenu(true),
+      ctaMenu("zh"),
       '严格只输出 JSON:{"posts":[{"id":1,"angle":"question","title":"…","hashtags":["#…"],"description":"…","ctaType":"comment","cta":"…"}]},id 与输入一一对应,angle/ctaType 必须用菜单里的 id。',
+    ].join("\n");
+  }
+  if (lang === "tr") {
+    return [
+      "Kısa video sosyal medya yöneticisisin; her klip için yayın metni yazıyorsun (TikTok / Shorts / Reels).",
+      "Her klip için üret: title = yayın başlığı (≤ 60 karakter, klip adını birebir kopyalama). Yazmaya başlamadan önce şu kanca açısı menüsünden içeriğe en uygununu seç; partide açıları değiştir, hepsi aynı kalıba girmesin:",
+      hookAngleMenu("tr"),
+      "[2026 algoritma notu] Kaydetme ve arama artık en yüksek ağırlığa sahip: başlığı izleyicinin arama kutusuna yazacağı biçimde kur (klibin somut isimlerini/sayılarını başlığa göm, yalnız duygu sözcüğü yazma); [kaydetmeye değer] işaretli kliplerde ctaType mutlaka save olsun, CTA \"sonra bakmak için kaydet\" desin ya da profil koleksiyonuna yönlendirsin, başlık bilgi veren bir kalıpta kalsın.",
+      "hashtags = 3-6 etiket (# ile, niş terimler önce, en fazla bir genel etiket);",
+      "description = bir iki cümle (≤ 120 karakter, kancayı sürdür, emoji yığma);",
+      "cta = kapanışta tek bir eylem çağrısı (≤ 40 karakter), türü içeriğe uyan menüden seç:",
+      ctaMenu("tr"),
+      `Yalnızca KESİN JSON döndür: {"posts":[{"id":1,"angle":"question","title":"...","hashtags":["#..."],"description":"...","ctaType":"comment","cta":"..."}]}; id değerleri girdiyle birebir eşleşsin, angle/ctaType menüdeki id olsun.`,
     ].join("\n");
   }
   return [
     "You are a short-video social manager writing post copy for each clip (TikTok/Shorts/Reels).",
     "For each clip output: title = a post title (≤ 60 chars, don't copy the clip name verbatim). Pick the best-fitting hook angle from this menu first, and vary angles across the batch:",
-    hookAngleMenu(false),
+    hookAngleMenu("en"),
     "[2026 algorithm notes] Saves and search now carry the most weight: prefer titles phrased as what viewers would type into search (embed the clip's concrete nouns/numbers, not just emotion words); clips tagged [save-worthy] must use ctaType=save with a 'save this for later' CTA and a how-to style title.",
     "hashtags = 3-6 tags (with #, niche terms first, at most one generic tag);",
     "description = one or two sentences (≤ 120 chars, extend the hook, no emoji spam);",
     "cta = one closing call-to-action line (≤ 40 chars), typed from this menu to match the content:",
-    ctaMenu(false),
+    ctaMenu("en"),
     'Output STRICT JSON only: {"posts":[{"id":1,"angle":"question","title":"…","hashtags":["#…"],"description":"…","ctaType":"comment","cta":"…"}]}, ids matching the input, angle/ctaType from the menus.',
   ].join("\n");
 }
 
-export function publishUserPrompt(sources: PublishSource[]): string {
+/**
+ * Field labels of the per-clip material block. A Turkish run used to get the
+ * Chinese labels here ("片名:"/"钩子:"), which the model then echoed back into
+ * Turkish copy; the labels follow the copy language now.
+ */
+const USER_LABELS: Record<AppLang, { title: string; hook: string; keywords: string; save: string; body: string }> = {
+  zh: { title: "片名", hook: "钩子", keywords: "关键词", save: "[可收藏]", body: "正文节选" },
+  tr: { title: "Klip adı", hook: "Kanca", keywords: "Anahtar kelimeler", save: "[kaydetmeye değer]", body: "Metinden alıntı" },
+  en: { title: "Clip", hook: "Hook", keywords: "Keywords", save: "[save-worthy]", body: "Body excerpt" },
+};
+
+export function publishUserPrompt(sources: PublishSource[], lang: AppLang): string {
+  const L = USER_LABELS[lang];
   return sources
     .map((s) => {
-      const kw = s.keywords.length > 0 ? ` 关键词:${s.keywords.join("/")}` : "";
-      const save = s.saveWorthy ? " [可收藏]" : "";
-      return `[${s.id}]${save} 片名:${s.title} 钩子:${s.hook}${kw}\n正文节选:${s.text.slice(0, TEXT_EXCERPT_CHARS)}`;
+      const kw = s.keywords.length > 0 ? ` ${L.keywords}:${s.keywords.join("/")}` : "";
+      const save = s.saveWorthy ? ` ${L.save}` : "";
+      return `[${s.id}]${save} ${L.title}:${s.title} ${L.hook}:${s.hook}${kw}\n${L.body}:${s.text.slice(0, TEXT_EXCERPT_CHARS)}`;
     })
     .join("\n\n");
 }
@@ -144,7 +171,7 @@ export function parsePublishCopies(content: string, validIds: Set<number>): Map<
  */
 export async function generatePublishCopies(
   sources: PublishSource[],
-  zh: boolean,
+  lang: AppLang,
   llm: LlmConfig,
   chat: PublishChatFn,
   signal?: AbortSignal
@@ -153,7 +180,7 @@ export async function generatePublishCopies(
   try {
     const timeout = AbortSignal.timeout(PUBLISH_TIMEOUT_MS);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-    const content = await chat(llm, publishSystemPrompt(zh), publishUserPrompt(sources), combined);
+    const content = await chat(llm, publishSystemPrompt(lang), publishUserPrompt(sources, lang), combined);
     const parsed = parsePublishCopies(content, new Set(sources.map((s) => s.id)));
     return parsed.size > 0 ? parsed : null;
   } catch (e) {
@@ -162,13 +189,17 @@ export async function generatePublishCopies(
   }
 }
 
-/** .post.txt 内容:标题 + 空行 + 话题 + 空行 + 简介(CTA 缀在简介后一行),直接全选复制。 */
-export function postTextFile(copy: PublishCopy, aigc = false): string {
+/**
+ * .post.txt 内容:标题 + 空行 + 话题 + 空行 + 简介(CTA 缀在简介后一行),直接全选复制。
+ * AIGC 通用提醒跟随界面语言(lang,缺省 zh 以保持 CLI/MCP 输出不变),不跟随
+ * 成片语言——它是写给发布者看的操作提示,不是观众读的文案。
+ */
+export function postTextFile(copy: PublishCopy, aigc = false, lang: AppLang = "zh"): string {
   const parts = [copy.title];
   if (copy.hashtags.length > 0) parts.push(copy.hashtags.join(" "));
   const body = [copy.description, copy.cta ?? ""].filter(Boolean).join("\n");
   if (body) parts.push(body);
   // 开了 AIGC 标识:通用提醒(各平台的具体操作提示在发布包 manifest/文案里)
-  if (aigc) parts.push("【AIGC 标注】发布时按平台要求勾选 AI 生成内容声明(未标注最高罚则为封号)");
+  if (aigc) parts.push(AIGC_POST_NOTE[lang]);
   return parts.join("\n\n") + "\n";
 }

@@ -108,7 +108,7 @@ describe("buildPublishPacks", () => {
       }
     );
     expect(summaries).toHaveLength(2);
-    const xhsDir = join(dir, PACK_DIR_NAME, "小红书");
+    const xhsDir = join(dir, PACK_DIR_NAME.zh, "小红书");
     const files = await readdir(xhsDir);
     expect(files).toContain("01-测试片.mp4");
     expect(files).toContain("01-测试片.jpg");
@@ -133,10 +133,10 @@ describe("buildPublishPacks", () => {
       async () => false // 裁切全部失败
     );
     expect(summaries).toHaveLength(1);
-    const files = await readdir(join(dir, PACK_DIR_NAME, "抖音"));
+    const files = await readdir(join(dir, PACK_DIR_NAME.zh, "抖音"));
     expect(files).toContain("01-测试片.mp4");
     expect(files).not.toContain("01-测试片.jpg");
-    const manifest = JSON.parse(await readFile(join(dir, PACK_DIR_NAME, "抖音", "manifest.json"), "utf8"));
+    const manifest = JSON.parse(await readFile(join(dir, PACK_DIR_NAME.zh, "抖音", "manifest.json"), "utf8"));
     expect(manifest.clips[0].cover).toBeNull();
   });
 
@@ -144,6 +144,33 @@ describe("buildPublishPacks", () => {
     const { dir, mp4 } = await setup();
     const summaries = await buildPublishPacks(dir, [{ file: mp4, title: "t" }], ["不存在的平台"], async () => true);
     expect(summaries).toEqual([]);
+  });
+
+  it("土耳其语界面语言:根目录/平台目录/manifest 备注与 AIGC 提示都是土耳其语", async () => {
+    const { dir, mp4 } = await setup();
+    const summaries = await buildPublishPacks(
+      dir,
+      [{ file: mp4, title: "测试片", publish: copy }],
+      ["douyin", "tiktok"],
+      async () => false,
+      true,
+      "tr"
+    );
+    expect(summaries).toHaveLength(2);
+    const expectedDir = join(dir, PACK_DIR_NAME.tr, "Douyin");
+    const files = await readdir(expectedDir);
+    expect(files).toContain("manifest.json");
+    const manifest = JSON.parse(await readFile(join(expectedDir, "manifest.json"), "utf8"));
+    expect(manifest.name).toBe("Douyin");
+    expect(manifest.note).toContain("ilk 55 karakter");
+    expect(manifest.aigcNote).toContain("AI ile üretildi");
+    expect(manifest.note).not.toMatch(/[一-鿿]/);
+    // 平台目录名也是本地化的(中文界面下才叫「抖音」)
+    const post = await readFile(join(expectedDir, "01-测试片.post.txt"), "utf8");
+    expect(post).toContain("[AIGC beyanı]");
+    // zh 缺省口径不受影响
+    await buildPublishPacks(dir, [{ file: mp4, title: "测试片" }], ["douyin"], async () => false);
+    await expect(readdir(join(dir, PACK_DIR_NAME.zh, "抖音"))).resolves.toContain("01-测试片.mp4");
   });
 
   it("重复打包(再导出一次)不炸:已存在的文件被替换", async () => {

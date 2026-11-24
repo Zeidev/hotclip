@@ -13,7 +13,8 @@
  */
 import { copyFile, link, mkdir, rm, writeFile } from "node:fs/promises";
 import { join, basename } from "node:path";
-import { platformSpec, validPlatformIds, type PlatformSpec } from "../shared/platform-specs";
+import { localized, platformSpec, validPlatformIds, type PlatformSpec } from "../shared/platform-specs";
+import type { AppLang } from "../shared/ui-lang";
 import type { PublishCopy } from "./publish";
 
 /** 平台名 → 文件夹名(与 export.ts 的 sanitizeFilename 同规则;不引 export 避免循环依赖)。 */
@@ -22,8 +23,22 @@ function safeDirName(name: string, fallback: string): string {
   return cleaned || fallback;
 }
 
-/** 发布包根目录名(落在导出目录下)。 */
-export const PACK_DIR_NAME = "发布包";
+/**
+ * 发布包根目录名(落在导出目录下)。给发布者看的目录名,跟随界面语言;
+ * 缺省取 zh 保持 CLI/MCP 输出不变。
+ */
+export const PACK_DIR_NAME: Record<AppLang, string> = {
+  zh: "发布包",
+  tr: "Yayın paketi",
+  en: "publish-pack",
+};
+
+/** 文案末尾 AIGC 提醒的行首标记,跟随界面语言。 */
+const AIGC_LINE_PREFIX: Record<AppLang, string> = {
+  zh: "【AIGC 标注】",
+  tr: "[AIGC beyanı] ",
+  en: "[AIGC label] ",
+};
 
 /** 打包输入:一条已导出的成片。 */
 export interface PackClipInput {
@@ -85,7 +100,9 @@ export function adaptPost(
   copy: PublishCopy | undefined,
   spec: PlatformSpec,
   /** 开了 AIGC 标识:文案末尾附该平台的标注操作提示(v0.14,新规三次违规封号)。 */
-  aigc = false
+  aigc = false,
+  /** 提醒文案的语言(界面语言,缺省 zh;写给发布者看,不跟随成片语言)。 */
+  lang: AppLang = "zh"
 ): AdaptedPost {
   const raw = (copy?.title ?? clipTitle).trim();
   const chars = Array.from(raw); // 按码点截,代理对/emoji 不切半
@@ -96,7 +113,7 @@ export function adaptPost(
   if (hashtags.length > 0) parts.push(hashtags.join(" "));
   const body = [copy?.description ?? "", copy?.cta ?? ""].filter(Boolean).join("\n");
   if (body) parts.push(body);
-  if (aigc) parts.push(`【AIGC 标注】${spec.aigcNoteZh}`);
+  if (aigc) parts.push(`${AIGC_LINE_PREFIX[lang]}${localized(spec.aigcNote, lang)}`);
   return { text: parts.join("\n\n") + "\n", title, titleTruncated, hashtags };
 }
 
@@ -120,13 +137,15 @@ export async function buildPublishPacks(
   platformIds: string[],
   adaptCover: AdaptCoverFn,
   /** 开了 AIGC 标识:每平台文案附标注操作提示,manifest 一并记录。 */
-  aigc = false
+  aigc = false,
+  /** 目录名/备注/提醒的语言(界面语言,缺省 zh 保持 CLI/MCP 输出不变)。 */
+  lang: AppLang = "zh"
 ): Promise<PackSummary[]> {
   const summaries: PackSummary[] = [];
   for (const id of validPlatformIds(platformIds)) {
     const spec = platformSpec(id)!;
     try {
-      const dir = join(outDir, PACK_DIR_NAME, safeDirName(spec.name.zh, spec.id));
+      const dir = join(outDir, PACK_DIR_NAME[lang], safeDirName(localized(spec.name, lang), spec.id));
       await mkdir(dir, { recursive: true });
       let truncated = 0;
       const rows: Array<Record<string, unknown>> = [];
@@ -140,7 +159,7 @@ export async function buildPublishPacks(
           const ok = await adaptCover(clip.coverFile, dest, spec).catch(() => false);
           if (ok) coverName = basename(dest);
         }
-        const post = adaptPost(clip.title, clip.publish, spec, aigc);
+        const post = adaptPost(clip.title, clip.publish, spec, aigc, lang);
         if (post.titleTruncated) truncated++;
         const postName = base.replace(/\.mp4$/, ".post.txt");
         await writeFile(join(dir, postName), post.text, "utf8").catch(() => {});
@@ -159,13 +178,13 @@ export async function buildPublishPacks(
         JSON.stringify(
           {
             platform: spec.id,
-            name: spec.name.zh,
+            name: localized(spec.name, lang),
             coverSize: `${spec.cover.w}x${spec.cover.h}`,
             titleMax: spec.titleMax,
             tagsMax: spec.tagsMax,
-            note: spec.noteZh,
+            note: localized(spec.note, lang),
             // AIGC 标注提醒:开了标识才写(发布前扫 manifest 就知道该在平台点哪个开关)
-            aigcNote: aigc ? spec.aigcNoteZh : null,
+            aigcNote: aigc ? localized(spec.aigcNote, lang) : null,
             clips: rows,
           },
           null,
@@ -173,7 +192,7 @@ export async function buildPublishPacks(
         ),
         "utf8"
       ).catch(() => {});
-      summaries.push({ platform: spec.id, name: spec.name.zh, dir, clipCount: clips.length, truncatedTitles: truncated });
+      summaries.push({ platform: spec.id, name: localized(spec.name, lang), dir, clipCount: clips.length, truncatedTitles: truncated });
     } catch {
       // 单平台失败不拖垮其余平台
     }
