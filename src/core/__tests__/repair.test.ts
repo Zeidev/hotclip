@@ -26,6 +26,14 @@ const ctx = (over: Partial<RepairContext> = {}): RepairContext => ({
 });
 
 describe("planRepair (修复计划推导)", () => {
+  it("动作清单跟随界面语言:tr 小数逗号、无 CJK", () => {
+    const plan = planRepair(baseReport({ silenceSpans: [{ startSec: 27.5, endSec: 30 }] }), ctx(), "tr");
+    expect(plan!.actions[0]).toContain("Sondan");
+    expect(plan!.actions[0]).toMatch(/\d,\d sn/);
+    expect(plan!.actions[0]).not.toMatch(/[一-鿿]/);
+    const en = planRepair(baseReport({ silenceSpans: [{ startSec: 0, endSec: 3 }] }), ctx(), "en");
+    expect(en!.actions[0]).toContain("from the start");
+  });
   it("贴片尾的长静音 → 裁尾(留 0.25s 呼吸垫)", () => {
     const plan = planRepair(baseReport({ silenceSpans: [{ startSec: 27.5, endSec: 30 }] }), ctx());
     expect(plan).not.toBeNull();

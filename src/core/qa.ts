@@ -14,6 +14,7 @@ import { probeMedia } from "./probe";
 import { EDGE_FADE_SEC } from "./cut";
 import { formatLintIssue, type LintHit } from "./content-lint";
 import type { TranscriptWord } from "../shared/api-types";
+import type { AppLang } from "../shared/ui-lang";
 
 /** 一段被检出的可疑区间(成片输出时间轴,秒)。 */
 export interface QaSpan {
@@ -260,57 +261,119 @@ export interface QaAssessment {
   hookPayoffMissing?: string[] | null;
   /** 人脸取景样本的主体覆盖汇总;缺省 = 未使用人脸取景。 */
   subjectCoverage?: SubjectCoverage | null;
+  /** 告警句式语言;缺省 zh(CLI/MCP 不传,回执与既有版本逐字节相同)。 */
+  lang?: AppLang;
 }
 
 const fmtSec = (v: number): string => v.toFixed(1);
+/** 土耳其语小数用逗号(1,5 sn),不共用 fmtSec 的点号口径。 */
+const trSec = (v: number): string => v.toFixed(1).replace(".", ",");
+
+/**
+ * 告警句式三语表。质检报告是给创作者读的(与 AIGC 标记、成片包目录名同一类),
+ * 跟随界面语言而非转写语言;zh 分支逐字保留旧文案,三个语言都不共用模板,
+ * 免得改土耳其语时动了中文回执的字节。
+ */
+interface QaText {
+  durationMismatch(actualSec: number, expectedSec: number, deltaSec: number): string;
+  black(count: number, longestSec: number): string;
+  silence(count: number, longestSec: number): string;
+  frozen(count: number, longestSec: number): string;
+  loudness(integratedLufs: number, devLu: number): string;
+  truePeak(peakDb: number, ceilingDb: number): string;
+  midWordCuts(count: number): string;
+  pacing(gapSec: number): string;
+  hookUnpaid(list: string): string;
+  faceClipped(ratio: number, worst: number): string;
+}
+const QA_TEXT: Record<AppLang, QaText> = {
+  zh: {
+    durationMismatch: (a, e, d) => `成片时长 ${fmtSec(a)}s 与预期 ${fmtSec(e)}s 偏差 ${fmtSec(d)}s`,
+    black: (n, l) => `检测到黑屏 ${n} 段(最长 ${fmtSec(l)}s)`,
+    silence: (n, l) => `检测到长静音 ${n} 段(最长 ${fmtSec(l)}s)`,
+    frozen: (n, l) => `检测到画面冻结 ${n} 段(最长 ${fmtSec(l)}s,建议回放核对)`,
+    loudness: (v, d) => `响度 ${fmtSec(v)} LUFS 偏离 -14 目标 ${fmtSec(d)} LU`,
+    truePeak: (p, c) => `真峰值 ${fmtSec(p)} dBTP 超过 ${c} 上限(平台转码有削波风险)`,
+    midWordCuts: (n) => `${n} 处切点落在词中间(可能出现半词,建议回放核对)`,
+    pacing: (g) => `画面 ${fmtSec(g)}s 无视觉变化(节奏偏慢,建议开启自动运镜或字幕)`,
+    hookUnpaid: (list) =>
+      `钩子/标题承诺的「${list}」未在片中出现(不兑付=标题党,完播率与账号权重双降,建议改钩子或换切点)`,
+    faceClipped: (ratio, worst) =>
+      `竖屏取景有 ${(ratio * 100).toFixed(0)}% 采样帧未完整保留人脸(最差 ${(worst * 100).toFixed(0)}%,建议检查构图)`,
+  },
+  en: {
+    durationMismatch: (a, e, d) => `Clip length ${fmtSec(a)}s differs from the expected ${fmtSec(e)}s by ${fmtSec(d)}s`,
+    black: (n, l) => `Black frames in ${n} span(s) (longest ${fmtSec(l)}s)`,
+    silence: (n, l) => `Long silence in ${n} span(s) (longest ${fmtSec(l)}s)`,
+    frozen: (n, l) => `Frozen picture in ${n} span(s) (longest ${fmtSec(l)}s, check on playback)`,
+    loudness: (v, d) => `Loudness ${fmtSec(v)} LUFS is ${fmtSec(d)} LU off the -14 target`,
+    truePeak: (p, c) => `True peak ${fmtSec(p)} dBTP is above the ${c} ceiling (platform transcoding may clip)`,
+    midWordCuts: (n) => `${n} cut(s) land mid-word (half-words may show, check on playback)`,
+    pacing: (g) => `No visual change for ${fmtSec(g)}s (pacing looks slow — turn on auto pan/zoom or captions)`,
+    hookUnpaid: (list) =>
+      `The hook/title promises "${list}" but the clip never delivers it (an unpaid promise reads as clickbait; completion and account weight both drop — change the hook or the cut)`,
+    faceClipped: (ratio, worst) =>
+      `${(ratio * 100).toFixed(0)}% of sampled frames do not keep the whole face in frame (worst ${(worst * 100).toFixed(0)}%, check the framing)`,
+  },
+  tr: {
+    durationMismatch: (a, e, d) => `Klip süresi ${trSec(a)} sn, beklenen ${trSec(e)} sn (${trSec(d)} sn sapma)`,
+    black: (n, l) => `Kara kare ${n} yerde bulundu (en uzun ${trSec(l)} sn)`,
+    silence: (n, l) => `Uzun sessizlik ${n} yerde var (en uzun ${trSec(l)} sn)`,
+    frozen: (n, l) => `Donmuş görüntü ${n} yerde (en uzun ${trSec(l)} sn, oynatıp kontrol edin)`,
+    loudness: (v, d) => `Ses yüksekliği ${trSec(v)} LUFS, -14 hedefinden ${trSec(d)} LU sapıyor`,
+    truePeak: (p, c) => `Gerçek tepe ${trSec(p)} dBTP, ${c} sınırının üstünde (platform dönüştürürken kırpılma riski)`,
+    midWordCuts: (n) => `${n} kesim noktası kelimenin ortasına düşüyor (yarım kelime görünebilir, oynatıp kontrol edin)`,
+    pacing: (g) => `${trSec(g)} sn boyunca görüntüde değişim yok (tempo yavaş — otomatik kaydırma/yakınlaştırma veya altyazı açın)`,
+    hookUnpaid: (list) =>
+      `Kanca/başlık "${list}" diye söz veriyor ama klip bunu karşılamıyor (söz tutulmazsa tıklama tuzağı; izlenme tamamlama ve hesap ağırlığı düşer — kancayı ya da kesimi değiştirin)`,
+    faceClipped: (ratio, worst) =>
+      `Dikey kadrajda örneklenen karelerin %${(ratio * 100).toFixed(0)}'inde yüz tam görünmüyor (en kötü %${(worst * 100).toFixed(0)}, çerçeveyi kontrol edin)`,
+  },
+};
 
 /** 纯判定:各项实测 → 告警清单与状态。 */
 export function assessClipQa(input: QaAssessment): ClipQaReport {
   const issues: string[] = [];
+  const lang = input.lang ?? "zh";
+  const t = QA_TEXT[lang];
   const delta = Math.abs(input.durationSec - input.expectedDurationSec);
   if (input.expectedDurationSec > 0 && delta > DURATION_TOLERANCE_SEC) {
-    issues.push(`成片时长 ${fmtSec(input.durationSec)}s 与预期 ${fmtSec(input.expectedDurationSec)}s 偏差 ${fmtSec(delta)}s`);
+    issues.push(t.durationMismatch(input.durationSec, input.expectedDurationSec, delta));
   }
   if (input.blackSpans.length > 0) {
     const longest = Math.max(...input.blackSpans.map((s) => s.endSec - s.startSec));
-    issues.push(`检测到黑屏 ${input.blackSpans.length} 段(最长 ${fmtSec(longest)}s)`);
+    issues.push(t.black(input.blackSpans.length, longest));
   }
   if (input.silenceSpans.length > 0) {
     const longest = Math.max(...input.silenceSpans.map((s) => s.endSec - s.startSec));
-    issues.push(`检测到长静音 ${input.silenceSpans.length} 段(最长 ${fmtSec(longest)}s)`);
+    issues.push(t.silence(input.silenceSpans.length, longest));
   }
   if ((input.frozenSpans?.length ?? 0) > 0) {
     const longest = Math.max(...input.frozenSpans!.map((s) => s.endSec - s.startSec));
-    issues.push(`检测到画面冻结 ${input.frozenSpans!.length} 段(最长 ${fmtSec(longest)}s,建议回放核对)`);
+    issues.push(t.frozen(input.frozenSpans!.length, longest));
   }
   if (input.loudnessNormalized && input.loudness) {
     const dev = Math.abs(input.loudness.integratedLufs - -14);
     if (dev > LOUDNESS_TOLERANCE_LU) {
-      issues.push(`响度 ${input.loudness.integratedLufs.toFixed(1)} LUFS 偏离 -14 目标 ${dev.toFixed(1)} LU`);
+      issues.push(t.loudness(input.loudness.integratedLufs, dev));
     }
     if (input.loudness.truePeakDb > TRUE_PEAK_CEILING_DB) {
-      issues.push(`真峰值 ${input.loudness.truePeakDb.toFixed(1)} dBTP 超过 ${TRUE_PEAK_CEILING_DB} 上限(平台转码有削波风险)`);
+      issues.push(t.truePeak(input.loudness.truePeakDb, TRUE_PEAK_CEILING_DB));
     }
   }
   if ((input.midWordCuts ?? 0) > 0) {
-    issues.push(`${input.midWordCuts} 处切点落在词中间(可能出现半词,建议回放核对)`);
+    issues.push(t.midWordCuts(input.midWordCuts!));
   }
   if ((input.pacingGapSec ?? 0) > PACING_MAX_GAP_SEC) {
-    issues.push(
-      `画面 ${fmtSec(input.pacingGapSec!)}s 无视觉变化(节奏偏慢,建议开启自动运镜或字幕)`
-    );
+    issues.push(t.pacing(input.pacingGapSec!));
   }
   if ((input.hookPayoffMissing?.length ?? 0) > 0) {
-    issues.push(
-      `钩子/标题承诺的「${input.hookPayoffMissing!.join("、")}」未在片中出现(不兑付=标题党,完播率与账号权重双降,建议改钩子或换切点)`
-    );
+    issues.push(t.hookUnpaid(input.hookPayoffMissing!.join(lang === "zh" ? "、" : ", ")));
   }
   if (input.subjectCoverage && (input.subjectCoverage.clippedRatio >= 0.15 || input.subjectCoverage.severeFrames >= 2)) {
-    issues.push(
-      `竖屏取景有 ${(input.subjectCoverage.clippedRatio * 100).toFixed(0)}% 采样帧未完整保留人脸(最差 ${(input.subjectCoverage.worstVisibleFraction * 100).toFixed(0)}%,建议检查构图)`
-    );
+    issues.push(t.faceClipped(input.subjectCoverage.clippedRatio, input.subjectCoverage.worstVisibleFraction));
   }
-  const lintIssue = formatLintIssue(input.contentHits ?? []);
+  const lintIssue = formatLintIssue(input.contentHits ?? [], lang);
   if (lintIssue) issues.push(lintIssue);
   return {
     status: issues.length > 0 ? "warn" : "pass",
@@ -377,6 +440,8 @@ export interface RunClipQaOptions {
   hookPayoffMissing?: string[] | null;
   /** 已按最终保留片段过滤的人脸覆盖汇总。 */
   subjectCoverage?: SubjectCoverage | null;
+  /** 告警句式语言(界面语言);缺省 zh,CLI/MCP 回执不变。 */
+  lang?: AppLang;
   signal?: AbortSignal;
 }
 
@@ -396,5 +461,6 @@ export async function runClipQa(path: string, opts: RunClipQaOptions): Promise<C
     pacingGapSec: opts.pacingGapSec,
     hookPayoffMissing: opts.hookPayoffMissing,
     subjectCoverage: opts.subjectCoverage,
+    lang: opts.lang,
   });
 }

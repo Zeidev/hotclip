@@ -126,4 +126,20 @@ describe("formatLintIssue (告警文案)", () => {
     );
     expect(many).toContain("等 7 处");
   });
+  it("tr/en 句式跟随 language 参数;缺省中文逐字不变", () => {
+    const hits = [
+      { term: "en iyi", category: "En üstünlük iddiası", source: "title" as const },
+      { term: "son gün", category: "Fiyat/acele baskısı", source: "caption" as const },
+    ];
+    const tr = formatLintIssue(hits, "tr")!;
+    expect(tr).toContain('"en iyi"');
+    expect(tr).toContain("başlık");
+    expect(tr).toContain("altyazı");
+    expect(tr).not.toMatch(/[一-鿿]/);
+    const en = formatLintIssue(hits, "en")!;
+    expect(en).toContain('"son gün"');
+    expect(en).toContain("captions");
+    expect(en).not.toMatch(/[一-鿿]/);
+    expect(formatLintIssue(hits)).toContain("「en iyi」");
+  });
 });

@@ -260,3 +260,56 @@ describe("assessClipQa (纯判定)", () => {
     expect(off.contentHits).toBeNull();
   });
 });
+
+/**
+ * 告警句式语言:报告是给发布者读的,跟随界面语言;缺省 zh 让 CLI/MCP 回执
+ * 逐字节不变。tr/en 不许漏中文(CJK 泄漏是品类判据踩过的坑),土耳其语
+ * 小数用逗号。
+ */
+describe("assessClipQa 告警句式语言", () => {
+  const CJK = /[一-鿿]/;
+  const dirty: QaAssessment = {
+    durationSec: 28.4,
+    expectedDurationSec: 30,
+    blackSpans: [{ startSec: 1, endSec: 2.1 }],
+    silenceSpans: [{ startSec: 5, endSec: 8.25 }],
+    frozenSpans: [{ startSec: 10, endSec: 13.5 }],
+    loudness: { integratedLufs: -18.4, truePeakDb: -0.2 },
+    loudnessNormalized: true,
+    midWordCuts: 2,
+    contentHits: [{ term: "en iyi", category: "En üstünlük iddiası", source: "title" }],
+    pacingGapSec: 7.5,
+    hookPayoffMissing: ["3 adım"],
+    subjectCoverage: {
+      sampledFrames: 10,
+      clippedFrames: 3,
+      severeFrames: 2,
+      clippedRatio: 0.3,
+      worstVisibleFraction: 0.5,
+    },
+  };
+
+  it("缺省 zh:句式与旧版逐字一致", () => {
+    const r = assessClipQa(dirty);
+    expect(r.issues[0]).toBe("成片时长 28.4s 与预期 30.0s 偏差 1.6s");
+    expect(r.issues.some((s) => s.startsWith("发布物料命中平台风险词:"))).toBe(true);
+    expect(r.issues).toHaveLength(11);
+  });
+
+  it("tr:全部告警为土耳其语、无 CJK、小数用逗号", () => {
+    const r = assessClipQa({ ...dirty, lang: "tr" });
+    expect(r.issues).toHaveLength(11);
+    for (const s of r.issues) expect(s).not.toMatch(CJK);
+    expect(r.issues[0]).toContain("Klip süresi");
+    expect(r.issues[0]).toContain("1,6 sn");
+    expect(r.issues.some((s) => s.includes("platform risk sözcüğü"))).toBe(true);
+  });
+
+  it("en:全部告警为英文、无 CJK", () => {
+    const r = assessClipQa({ ...dirty, lang: "en" });
+    expect(r.issues).toHaveLength(11);
+    for (const s of r.issues) expect(s).not.toMatch(CJK);
+    expect(r.issues[0]).toContain("Clip length");
+    expect(r.issues.some((s) => s.includes("platform risk terms"))).toBe(true);
+  });
+});

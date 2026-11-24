@@ -8,6 +8,7 @@
  * 高频雷词(带货场景优先)。全部纯函数可单测;规则表就是数据,加词改词
  * 不动逻辑。
  */
+import type { AppLang } from "../shared/ui-lang";
 
 /** 命中来源:哪份物料撞的词。 */
 export type LintSource = "title" | "hook" | "publish" | "caption";
@@ -77,7 +78,7 @@ const LINT_RULES: LintRuleSet[] = [
   // 疗效宣称、虚构紧迫感)+ RTÜK 对健康/美容类宣称的限制。中文规则用的是 CJK
   // 正则,扫不到土耳其语文本,反之亦然,两组互不干扰。类别名写成土耳其语:
   // 告警是给土耳其语创作者看的,他把文案改成土耳其语发布,风险类别也得认得出。
-  // (外层告警句式 formatLintIssue 仍是中文——那是另一处本地化,不在本次范围。)
+  // 外层告警句式见 formatLintIssue 的三语分支(跟随界面语言,缺省中文)。
   {
     // Yönetmelik 的 "en üstünlük iddiası":不能自称最好/最便宜/唯一
     category: "En üstünlük iddiası",
@@ -174,23 +175,41 @@ export function lintClipContent(input: ClipLintInput): LintHit[] {
   return hits;
 }
 
-const SOURCE_LABEL: Record<LintSource, string> = {
-  title: "标题",
-  hook: "钩子",
-  publish: "文案",
-  caption: "字幕",
+/** 物料来源的显示名(按告警语言取;tr/en 用创作者实际认得的叫法)。 */
+const SOURCE_LABEL: Record<AppLang, Record<LintSource, string>> = {
+  zh: { title: "标题", hook: "钩子", publish: "文案", caption: "字幕" },
+  en: { title: "title", hook: "hook", publish: "copy", caption: "captions" },
+  tr: { title: "başlık", hook: "kanca", publish: "metin", caption: "altyazı" },
 };
 
 /** 告警文案里最多点名几个词(其余归入「等 N 个」,完整清单在 contentHits)。 */
 const ISSUE_MAX_TERMS = 5;
 
-/** 命中清单 → 一条人类可读告警;无命中返回 null。 */
-export function formatLintIssue(hits: LintHit[]): string | null {
+/**
+ * 命中清单 → 一条人类可读告警;无命中返回 null。
+ *
+ * 句式跟随界面语言(lang),缺省 zh——告警是给发布者读的,与 AIGC 标记、
+ * 成片包目录名同一类。CLI/MCP 不传 lang,回执与既有版本逐字节相同。
+ */
+export function formatLintIssue(hits: LintHit[], lang: AppLang = "zh"): string | null {
   if (hits.length === 0) return null;
+  const label = SOURCE_LABEL[lang];
+  if (lang === "zh") {
+    const shown = hits
+      .slice(0, ISSUE_MAX_TERMS)
+      .map((h) => `「${h.term}」(${h.category}·${label[h.source]})`)
+      .join("、");
+    const more = hits.length > ISSUE_MAX_TERMS ? `等 ${hits.length} 处` : "";
+    return `发布物料命中平台风险词:${shown}${more}(发布前请按平台规则核对)`;
+  }
   const shown = hits
     .slice(0, ISSUE_MAX_TERMS)
-    .map((h) => `「${h.term}」(${h.category}·${SOURCE_LABEL[h.source]})`)
-    .join("、");
-  const more = hits.length > ISSUE_MAX_TERMS ? `等 ${hits.length} 处` : "";
-  return `发布物料命中平台风险词:${shown}${more}(发布前请按平台规则核对)`;
+    .map((h) => `"${h.term}" (${h.category} · ${label[h.source]})`)
+    .join(", ");
+  if (lang === "tr") {
+    const more = hits.length > ISSUE_MAX_TERMS ? `, toplam ${hits.length}` : "";
+    return `Yayın malzemesinde platform risk sözcüğü: ${shown}${more} (yayınlamadan önce platform kurallarını kontrol edin)`;
+  }
+  const more = hits.length > ISSUE_MAX_TERMS ? `, ${hits.length} in total` : "";
+  return `Publish material hits platform risk terms: ${shown}${more} (check the platform rules before publishing)`;
 }

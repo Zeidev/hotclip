@@ -1387,6 +1387,8 @@ export async function exportClips(
           pacingGapSec,
           hookPayoffMissing,
           subjectCoverage: reframeCoverage,
+          // QA 告警句式跟随界面语言(和 AIGC 标记同一类);缺省 zh
+          lang: uiLang(options.locale),
           signal,
         };
         const expected = clipDuration + (coldOpenSec ?? 0);
@@ -1398,10 +1400,14 @@ export async function exportClips(
         // (二遍归一)——当场修掉再重检,告警变少才替换成片;修复失败或没
         // 变好都保留原片并记录尝试(qa.repair)。
         if (qaReport?.status === "warn" && options.qaRepair !== false) {
-          const repairPlan = planRepair(qaReport, {
-            normalizeLoudness: Boolean(options.normalizeLoudness),
-            headTrimmable: coldOpenSec === null,
-          });
+          const repairPlan = planRepair(
+            qaReport,
+            {
+              normalizeLoudness: Boolean(options.normalizeLoudness),
+              headTrimmable: coldOpenSec === null,
+            },
+            uiLang(options.locale)
+          );
           if (repairPlan) {
             const repairMedia = await probeMedia(outPath).catch(() => null);
             const outcome = await applyRepair(

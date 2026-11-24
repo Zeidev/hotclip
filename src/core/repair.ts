@@ -17,6 +17,7 @@ import { runFfmpeg, edgeFadeFilters, LOUDNORM_FILTER, LOUDNORM_OUT_RATE } from "
 import { colorOutputArgs, type ColorRenderPlan } from "./color";
 import { ffmpegAudioStreamSpecifier, ffmpegVideoStreamSpecifier } from "./probe";
 import type { ClipQaReport, QaRepairRecord } from "./qa";
+import type { AppLang } from "../shared/ui-lang";
 
 /** 静音/黑屏区间「贴着」片头/片尾的判定余量(秒)。 */
 const EDGE_TOUCH_SEC = 0.25;
@@ -54,11 +55,17 @@ export interface RepairPlan {
 
 const fmtSec = (v: number): string => v.toFixed(1);
 
+/** 土耳其语小数用逗号(与 qa.ts 的 trSec 同一口径)。 */
+const trSec = (v: number): string => v.toFixed(1).replace(".", ",");
+
 /**
  * 从质检报告推导修复计划;没有可自愈项返回 null。
  * 只认贴着首尾的静音/黑屏——片中区间是内容取舍,不归机器管。
+ *
+ * 动作清单是写给人看的(进 clips.json 的 qa.repair.actions),语言跟随界面
+ * (lang),缺省 zh——CLI/MCP 不传,回执逐字节不变。
  */
-export function planRepair(report: ClipQaReport, ctx: RepairContext): RepairPlan | null {
+export function planRepair(report: ClipQaReport, ctx: RepairContext, lang: AppLang = "zh"): RepairPlan | null {
   const dur = report.durationSec;
   const actions: string[] = [];
 
@@ -97,8 +104,14 @@ export function planRepair(report: ClipQaReport, ctx: RepairContext): RepairPlan
     trimEnd = null;
   }
 
-  if (trimStart > 0) actions.push(`裁掉开头 ${fmtSec(trimStart)}s 静音/黑屏`);
-  if (trimEnd !== null) actions.push(`裁掉结尾 ${fmtSec(dur - trimEnd)}s 静音/黑屏`);
+  const trimAction = (where: "start" | "end", sec: number): string =>
+    lang === "zh"
+      ? `裁掉${where === "start" ? "开头" : "结尾"} ${fmtSec(sec)}s 静音/黑屏`
+      : lang === "tr"
+        ? `${where === "start" ? "Baştan" : "Sondan"} ${trSec(sec)} sn sessizlik/kara kare kesildi`
+        : `Trimmed ${fmtSec(sec)}s of silence/black from the ${where}`;
+  if (trimStart > 0) actions.push(trimAction("start", trimStart));
+  if (trimEnd !== null) actions.push(trimAction("end", dur - trimEnd));
 
   // 响度:只在出片开了标准化、且实测确实偏了/超峰时重归一
   const loudness =
@@ -106,7 +119,15 @@ export function planRepair(report: ClipQaReport, ctx: RepairContext): RepairPlan
     report.loudness !== null &&
     (Math.abs(report.loudness.integratedLufs - -14) > LOUDNESS_TOLERANCE_LU ||
       report.loudness.truePeakDb > TRUE_PEAK_CEILING_DB);
-  if (loudness) actions.push("音频响度二遍归一(-14 LUFS)");
+  if (loudness) {
+    actions.push(
+      lang === "zh"
+        ? "音频响度二遍归一(-14 LUFS)"
+        : lang === "tr"
+          ? "Ses yüksekliği -14 LUFS'a ikinci geçişle normalize edildi"
+          : "Audio loudness re-normalized to -14 LUFS"
+    );
+  }
 
   if (actions.length === 0) return null;
   const trimmedSec = trimStart + (trimEnd !== null ? dur - trimEnd : 0);
