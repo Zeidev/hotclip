@@ -132,6 +132,16 @@ export interface SubtitleRepairReport {
   dropped: number;
   /** Cues arrived out of chronological order and were re-sorted by time. */
   reordered: boolean;
+  /**
+   * Whole-track offset this receipt's track was shifted by, in seconds;
+   * cumulative after several shifts. Absent until someone shifts the track by
+   * hand, so a freshly imported file carries none of the three fields below.
+   */
+  shiftedSec?: number;
+  /** Cues whose start/end the offset moved. */
+  shifted?: number;
+  /** Cues the source boundary cut after the shift (head pinned to 0 or tail cut). */
+  clipped?: number;
 }
 
 export type TranscribeStage =
@@ -743,6 +753,22 @@ export type SessionEditCommand =
         before: TranscriptSegment;
         after: TranscriptSegment;
       }>;
+      /**
+       * Segments the update removed from the track (a time offset that pushed a
+       * cue off the source, or read after the track was emptied). Replaying the
+       * command forward drops them again, replaying it back re-inserts them, so
+       * an edit that loses a cue stays undoable.
+       */
+      removed?: TranscriptSegment[];
+      /**
+       * Track receipt before and after, when the update also rewrote it (a
+       * manual shift). `undefined` inside the pair means "no receipt at all";
+       * the whole field is absent when the update left the receipt alone.
+       */
+      repair?: {
+        before: SubtitleRepairReport | undefined;
+        after: SubtitleRepairReport | undefined;
+      };
     };
 
 /** Two JSON-safe stacks; the final item in each array is the next command to replay. */

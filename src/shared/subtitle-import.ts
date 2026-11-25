@@ -1,5 +1,5 @@
 /** Plain-text subtitle interchange. No DOM, model, network or filesystem access. */
-import type { SubtitleRepairReport, Transcript, TranscriptSegment } from "./api-types";
+import type { SubtitleRepairReport, Transcript, TranscriptSegment, TranscriptWord } from "./api-types";
 import { rebuildWords } from "./edit-transcript";
 
 export type SubtitleFormat = "srt" | "vtt";
@@ -161,12 +161,157 @@ export function repairSubtitleCues(
 }
 
 /**
+ * Signed fixed-point offset for receipts and notices, e.g. "+0.50s" / "-0.30s".
+ * ASCII sign and dot on purpose: it is read by people and pasted into files.
+ */
+export function formatSubtitleOffset(offsetSec: number): string {
+  return `${offsetSec >= 0 ? "+" : "-"}${Math.abs(offsetSec).toFixed(2)}s`;
+}
+
+/**
+ * Move a whole track in time, text untouched: an intro or jingle at the head of
+ * the source otherwise forces the creator to re-time every line by hand. Only
+ * times move, and the edges follow the rules the import path already applies:
+ *
+ *  - a cue the offset pushes off the head (its end lands at or before 0) is
+ *    dropped, exactly as repair drops a cue with no time to keep;
+ *  - a cue the offset pushes past the source (its start reaches the source
+ *    duration) is dropped for the same reason;
+ *  - a surviving cue is clamped into [0, source duration] — the same trimming
+ *    the import path already does to a tail — and the clamp is receipted;
+ *  - clamping can land a later cue on an earlier one, so the shifted track runs
+ *    through `repairSubtitleCues`: overlap/zero-length/order rules are never
+ *    re-implemented here.
+ *
+ * A zero (or unusable) offset is not a shift: it returns the plain repair
+ * result and no shift fields, so no receipt claims work that never happened.
+ */
+export function shiftSubtitleCues(
+  cues: readonly ParsedCue[],
+  offsetSec: number,
+  durationSec: number
+): { cues: ParsedCue[]; report: SubtitleRepairReport } {
+  if (!Number.isFinite(offsetSec) || offsetSec === 0) return repairSubtitleCues(cues, durationSec);
+  const bounded = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : Infinity;
+  const moved: ParsedCue[] = [];
+  let dropped = 0;
+  let clipped = 0;
+  for (const cue of cues) {
+    const startSec = cue.startSec + offsetSec;
+    const endSec = cue.endSec + offsetSec;
+    if (endSec <= 0 || startSec >= bounded) {
+      dropped++;
+      continue;
+    }
+    const start = Math.max(0, startSec);
+    const end = Math.min(endSec, bounded);
+    if (start !== startSec || end !== endSec) clipped++;
+    moved.push({ index: cue.index, startSec: start, endSec: end, text: cue.text });
+  }
+  const repairedTrack = repairSubtitleCues(moved, bounded);
+  return {
+    cues: repairedTrack.cues,
+    report: {
+      cues: cues.length,
+      repaired: repairedTrack.report.repaired,
+      dropped: dropped + repairedTrack.report.dropped,
+      reordered: repairedTrack.report.reordered,
+      shiftedSec: offsetSec,
+      shifted: moved.length,
+      clipped,
+    },
+  };
+}
+
+/**
+ * Shift every word of a cue by the same offset and clamp each one into the
+ * cue's own window. Text is never re-read, so a creator's own line survives
+ * byte-for-byte; a cue whose words all fell outside the window (a cue trimmed
+ * to a sliver) falls back to the estimate the import path uses.
+ */
+function shiftWordTimes(
+  words: readonly TranscriptWord[],
+  text: string,
+  offsetSec: number,
+  startSec: number,
+  endSec: number
+): TranscriptWord[] {
+  const moved = words
+    .map((word) => ({
+      ...word,
+      startSec: Math.max(startSec, word.startSec + offsetSec),
+      endSec: Math.min(endSec, word.endSec + offsetSec),
+    }))
+    .filter((word) => word.endSec > word.startSec);
+  if (moved.length > 0 || !text) return moved;
+  return rebuildWords(text, startSec, endSec).map((word) => ({ ...word, timingSource: "estimated" as const }));
+}
+
+/** Fold a shift receipt onto the receipt the track already carried (if any). */
+function mergeSubtitleRepair(
+  previous: SubtitleRepairReport | undefined,
+  shift: SubtitleRepairReport
+): SubtitleRepairReport {
+  return {
+    cues: previous?.cues ?? shift.cues,
+    repaired: (previous?.repaired ?? 0) + shift.repaired,
+    dropped: (previous?.dropped ?? 0) + shift.dropped,
+    reordered: (previous?.reordered ?? false) || shift.reordered,
+    shiftedSec: (previous?.shiftedSec ?? 0) + (shift.shiftedSec ?? 0),
+    shifted: (previous?.shifted ?? 0) + (shift.shifted ?? 0),
+    clipped: (previous?.clipped ?? 0) + (shift.clipped ?? 0),
+  };
+}
+
+/**
+ * Apply a manual offset to an imported subtitle transcript — cue times, word
+ * times and the receipt — and return the shifted track. A zero or unusable
+ * offset returns the very same object, so "apply 0" adds no receipt and no
+ * render. A shift that would push every cue off the source is refused the same
+ * way: an offset corrects alignment, it is not a way to delete a transcript.
+ */
+export function shiftSubtitleTranscript(transcript: Transcript, offsetSec: number): Transcript {
+  if (!Number.isFinite(offsetSec) || offsetSec === 0) return transcript;
+  const shifted = shiftSubtitleCues(
+    transcript.segments.map((segment) => ({
+      index: segment.id,
+      startSec: segment.startSec,
+      endSec: segment.endSec,
+      text: segment.text,
+    })),
+    offsetSec,
+    transcript.durationSec
+  );
+  const source = new Map(transcript.segments.map((segment) => [segment.id, segment]));
+  const segments: TranscriptSegment[] = [];
+  for (const cue of shifted.cues) {
+    const segment = source.get(cue.index);
+    if (!segment) continue;
+    segments.push({
+      ...segment,
+      startSec: cue.startSec,
+      endSec: cue.endSec,
+      words: shiftWordTimes(segment.words, segment.text, offsetSec, cue.startSec, cue.endSec),
+    });
+  }
+  if (segments.length === 0) return transcript;
+  return {
+    ...transcript,
+    segments,
+    subtitleRepair: mergeSubtitleRepair(transcript.subtitleRepair, shifted.report),
+  };
+}
+
+/**
  * Same receipt for the locale-free console surfaces. CLI and MCP emit Chinese
  * only (they pass no locale), so this mirrors the phrasing of their existing
  * import note instead of resolving a UI language.
  */
 export function describeSubtitleRepairZh(report: SubtitleRepairReport): string {
   const parts: string[] = [];
+  if (report.shiftedSec !== undefined) parts.push(`整体平移 ${formatSubtitleOffset(report.shiftedSec)}`);
+  if (report.shifted !== undefined && report.shifted > 0) parts.push(`移动 ${report.shifted} 段`);
+  if (report.clipped) parts.push(`按片长裁剪 ${report.clipped} 段`);
   if (report.repaired > 0) parts.push(`修复 ${report.repaired} 处字幕时间`);
   if (report.dropped > 0) parts.push(`丢弃 ${report.dropped} 段无可保留时间的字幕`);
   if (report.reordered) parts.push("按时间重新排序");
@@ -174,16 +319,21 @@ export function describeSubtitleRepairZh(report: SubtitleRepairReport): string {
 }
 
 /**
- * Human-readable receipt for a repaired track, so every surface (import panel,
- * transcript panel, CLI, MCP) reports the same facts. `t` is the caller's
- * translator for the "transcribe" namespace; a repair that changed nothing
- * yields "" and callers show nothing.
+ * Human-readable receipt for a repaired or hand-shifted track, so every surface
+ * (import panel, transcript panel, CLI, MCP) reports the same facts. `t` is the
+ * caller's translator for the "transcribe" namespace; a receipt that changed
+ * nothing yields "" and callers show nothing.
  */
 export function subtitleRepairNotice(
   report: SubtitleRepairReport,
   t: (key: string, params?: Record<string, string | number>) => string
 ): string {
   const parts: string[] = [];
+  // The manual shift happened last, so it reads first; the import repair facts
+  // the track still carries follow it.
+  if (report.shiftedSec !== undefined) parts.push(t("subtitleShiftedBy", { sec: formatSubtitleOffset(report.shiftedSec) }));
+  if (report.shifted !== undefined && report.shifted > 0) parts.push(t("subtitleShiftedCues", { n: report.shifted }));
+  if (report.clipped) parts.push(t("subtitleShiftClipped", { n: report.clipped }));
   if (report.repaired > 0) parts.push(t("subtitleRepairedCues", { n: report.repaired }));
   if (report.dropped > 0) parts.push(t("subtitleRepairedDropped", { n: report.dropped }));
   if (report.reordered) parts.push(t("subtitleRepairedReordered"));

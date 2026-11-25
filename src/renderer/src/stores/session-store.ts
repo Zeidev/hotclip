@@ -166,12 +166,25 @@ export const useSession = create<SessionState>((set, get) => ({
     const state = get();
     if (!state.transcript) return;
     const previous = new Map(state.transcript.segments.map((segment) => [segment.id, segment]));
+    const live = new Set(transcript.segments.map((segment) => segment.id));
     const changes = transcript.segments.flatMap((after) => {
       const before = previous.get(after.id);
       return before && JSON.stringify(before) !== JSON.stringify(after) ? [{ segmentId: after.id, before, after }] : [];
     });
-    if (changes.length === 0) return;
-    set({ transcript, editHistory: appendSessionEdit(state.editHistory, { kind: "transcript-update", changes }) });
+    // A time offset can push a cue clean off the source. The command has to
+    // carry those cues, or undoing the edit could never put them back.
+    const removed = state.transcript.segments.filter((segment) => !live.has(segment.id));
+    const repairChanged = JSON.stringify(state.transcript.subtitleRepair) !== JSON.stringify(transcript.subtitleRepair);
+    if (changes.length === 0 && removed.length === 0) return;
+    set({
+      transcript,
+      editHistory: appendSessionEdit(state.editHistory, {
+        kind: "transcript-update",
+        changes,
+        ...(removed.length > 0 ? { removed } : {}),
+        ...(repairChanged ? { repair: { before: state.transcript.subtitleRepair, after: transcript.subtitleRepair } } : {}),
+      }),
+    });
   },
   setSelected: (selected) => set({ selected }),
   toggleSelected: (id) => {
@@ -271,10 +284,22 @@ function applyEditCommand(state: ReplayableState, command: SessionEditCommand, d
   }
   if (!state.transcript) return {};
   const replacements = new Map(command.changes.map((change) => [change.segmentId, previous ? change.before : change.after]));
+  const dropped = command.removed ?? [];
+  const keptSegments = previous
+    ? state.transcript.segments
+    : state.transcript.segments.filter((segment) => !dropped.some((entry) => entry.id === segment.id));
+  // Undo puts back whatever the edit removed, in chronological place; redo takes
+  // those cues out again. A command with nothing removed replays the transcript
+  // segment order exactly as it was.
+  const segments = (previous && dropped.length > 0
+    ? [...keptSegments, ...dropped].sort((a, b) => a.startSec - b.startSec || a.id - b.id)
+    : keptSegments
+  ).map((segment) => replacements.get(segment.id) ?? segment);
   return {
     transcript: {
       ...state.transcript,
-      segments: state.transcript.segments.map((segment) => replacements.get(segment.id) ?? segment),
+      segments,
+      ...(command.repair ? { subtitleRepair: previous ? command.repair.before : command.repair.after } : {}),
     },
   };
 }

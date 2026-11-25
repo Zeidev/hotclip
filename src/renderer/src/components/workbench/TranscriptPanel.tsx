@@ -11,7 +11,7 @@ import { useT } from "../../i18n/store";
 import { getApi } from "../../api/provider";
 import { useSession } from "../../stores/session-store";
 import { editSegmentText } from "../../../../shared/edit-transcript";
-import { subtitleRepairNotice } from "../../../../shared/subtitle-import";
+import { shiftSubtitleTranscript, subtitleRepairNotice } from "../../../../shared/subtitle-import";
 import { summarizeTimingQuality } from "../../../../shared/transcript-quality";
 import { searchVisualEvidence, type VisualEvidenceNote } from "../../../../shared/evidence-search";
 import { evidenceContext, evidenceResults, nextEvidenceIndex, type EvidenceSource } from "../../../../shared/evidence-navigation";
@@ -51,6 +51,7 @@ export function TranscriptPanel({ transcript, visualNotes, onSeek, onAudition, o
   const [source, setSource] = useState<EvidenceSource>("all");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [alignmentOpen, setAlignmentOpen] = useState(false);
+  const [shiftInput, setShiftInput] = useState("0.5");
   const timingReviewIds = useMemo(() => new Set(
     transcript.segments
       .filter((segment) => summarizeTimingQuality(segment.words).uncertainWords > 0)
@@ -82,6 +83,21 @@ export function TranscriptPanel({ transcript, visualNotes, onSeek, onAudition, o
     const matched = query.trim() ? new Set(results.flatMap((r) => r.kind === "transcript" ? r.hit.segmentIds : [])) : null;
     return transcript.segments.filter((s) => (!showTimingReview || timingReviewIds.has(s.id)) && (effectiveSpeakerFilter === null || s.speaker === effectiveSpeakerFilter) && (!matched || matched.has(s.id)));
   }, [transcript.segments, showTimingReview, timingReviewIds, query, results, effectiveSpeakerFilter]);
+
+  // 整轨平移:素材带片头/片尾时,创作者不必逐句改时间码。
+  const shiftSeconds = Number(shiftInput.trim().replace(",", "."));
+  const shiftValid = Number.isFinite(shiftSeconds) && shiftSeconds !== 0;
+  // 全部字幕都会被推出片源时,共享的纯函数会拒绝这次平移;按钮先一步禁用,
+  // 让创作者在点击之前就看见这一步不成立。
+  const shiftEmptiesTrack = shiftValid && transcript.segments.length > 0 && (shiftSeconds > 0
+    ? transcript.segments[0].startSec + shiftSeconds >= transcript.durationSec
+    : transcript.segments[transcript.segments.length - 1].endSec + shiftSeconds <= 0);
+  const canShift = shiftValid && !shiftEmptiesTrack;
+
+  const applyShift = (): void => {
+    if (!canShift) return;
+    editTranscript(shiftSubtitleTranscript(transcript, shiftSeconds));
+  };
 
   const commitSegEdit = (segId: number, value: string): void => {
     setEditingSeg(null);
@@ -205,12 +221,38 @@ export function TranscriptPanel({ transcript, visualNotes, onSeek, onAudition, o
         <AlignmentReview transcript={transcript} selectedIds={[...selectedIds]} onAudition={onAudition} />
       </>}
       {transcript.engine.startsWith("subtitle-") && (
-        <p className="shrink-0 border-b border-line/60 px-3 py-2 text-xs leading-relaxed text-mut">
-          {t("subtitleImported")}
-          {transcript.subtitleRepair && (
-            <span className="mt-0.5 block text-amber-400">{subtitleRepairNotice(transcript.subtitleRepair, t)}</span>
-          )}
-        </p>
+        <div className="shrink-0 border-b border-line/60 px-3 py-2 text-xs leading-relaxed text-mut">
+          <p>
+            {t("subtitleImported")}
+            {transcript.subtitleRepair && (
+              <span className="mt-0.5 block text-amber-400">{subtitleRepairNotice(transcript.subtitleRepair, t)}</span>
+            )}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label={t("subtitleShiftLabel")}>
+            <label className="flex items-center gap-1.5" title={t("subtitleShiftHint")}>
+              <span>{t("subtitleShiftLabel")}</span>
+              <input
+                type="number"
+                step="0.1"
+                inputMode="decimal"
+                value={shiftInput}
+                onChange={(event) => setShiftInput(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") applyShift(); }}
+                className="w-20 rounded-md border border-line bg-panel px-2 py-1 font-mono text-[11px] text-fg outline-none focus:border-ember/60"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={!canShift}
+              title={canShift ? undefined : t("subtitleShiftHint")}
+              onClick={applyShift}
+              className="rounded-md border border-line px-2.5 py-1 transition-colors hover:border-mut disabled:opacity-40"
+            >
+              {t("subtitleShiftApply")}
+            </button>
+            <span className="text-[11px] text-mut/80">{t("subtitleShiftHint")}</span>
+          </div>
+        </div>
       )}
       {pending && (
         <div className="mx-2 mt-2 flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-ember/40 bg-ember/5 px-3 py-2">

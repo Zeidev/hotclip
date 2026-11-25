@@ -99,6 +99,31 @@ describe("session store recovery", () => {
     expect(useSession.getState().transcript?.segments[1].text).toBe("修正后");
   });
 
+  it("keeps a cue the edit removed undoable, and the track receipt with it", () => {
+    const original = transcript();
+    useSession.getState().restore({ ...checkpoint, transcript: original });
+    // What a -0.5s track shift looks like: cue 1 went off the head, cue 2 moved,
+    // and the receipt now carries the shift.
+    const shifted: Transcript = {
+      ...original,
+      segments: [{ ...original.segments[1], startSec: 1.5, endSec: 3.5 }],
+      subtitleRepair: { cues: 2, repaired: 0, dropped: 1, reordered: false, shiftedSec: -0.5, shifted: 1, clipped: 0 },
+    };
+    useSession.getState().editTranscript(shifted);
+    expect(useSession.getState().editHistory.undo[0]).toMatchObject({
+      kind: "transcript-update",
+      removed: [{ id: 1 }],
+      repair: { before: undefined, after: { shiftedSec: -0.5 } },
+    });
+    expect(useSession.getState().transcript?.segments.map((s) => s.id)).toEqual([2]);
+    useSession.getState().undoEdit();
+    expect(useSession.getState().transcript?.segments.map((s) => s.id)).toEqual([1, 2]);
+    expect(useSession.getState().transcript?.segments[1]).toMatchObject({ startSec: 2, endSec: 4, text: "第二句" });
+    expect(useSession.getState().transcript?.subtitleRepair).toBeUndefined();
+    useSession.getState().redoEdit();
+    expect(useSession.getState().transcript?.segments.map((s) => s.id)).toEqual([2]);
+    expect(useSession.getState().transcript?.subtitleRepair?.shiftedSec).toBe(-0.5);
+  });
   it("persists history, clears redo after a branch, and resets it on a new AI baseline", () => {
     useSession.getState().restore({ ...checkpoint, selected: [3] });
     useSession.getState().patchCandidate(3, { title: "first" });
