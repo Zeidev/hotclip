@@ -82,8 +82,8 @@ export function buildOverlayPayload(
   const keywordSet = new Set(
     (options.keywords ?? []).map((k) => k.toLowerCase()).filter(Boolean)
   );
-  const planned = options.readability ? planReadableCaptions(fused, layout.maxLineUnits, options.forcedBreaks, options.endSec) : undefined;
-  const grouped = planned ? planned.map((line) => line.words) : groupWordsIntoLines(fused, layout.maxLineUnits, options.forcedBreaks).filter(
+  const planned = options.readability ? planReadableCaptions(fused, layout.maxLineUnits, options.forcedBreaks, options.endSec, options.lang) : undefined;
+  const grouped = planned ? planned.map((line) => line.words) : groupWordsIntoLines(fused, layout.maxLineUnits, options.forcedBreaks, options.lang).filter(
     (l) => l.length > 0
   );
 

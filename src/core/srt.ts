@@ -41,8 +41,8 @@ export function srtLinesFromWords(
   translation: TranslationLine[] = [],
   options: CaptionReadabilityOptions = {}
 ): SrtLine[] {
-  const planned = options.readability ? planReadableCaptions(words, SRT_MAX_LINE_UNITS, forcedBreaks, options.endSec) : undefined;
-  const lines = planned ? planned.map((line) => line.words) : groupWordsIntoLines(words, SRT_MAX_LINE_UNITS, forcedBreaks).filter((l) => l.length > 0);
+  const planned = options.readability ? planReadableCaptions(words, SRT_MAX_LINE_UNITS, forcedBreaks, options.endSec, options.lang) : undefined;
+  const lines = planned ? planned.map((line) => line.words) : groupWordsIntoLines(words, SRT_MAX_LINE_UNITS, forcedBreaks, options.lang).filter((l) => l.length > 0);
   const out: SrtLine[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];

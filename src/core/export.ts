@@ -878,6 +878,8 @@ export async function exportClips(
             endSec: captionShift + clipDuration,
             // A cross-faded splice overlaps captions by the transition length.
             overlapToleranceSec: Math.max(0.05, (options.transitionSec ?? 0) + 0.05),
+            // 拉丁文(Türkçe/English)用行尾禁忌词回退 + 17 CPS 预算
+            lang: uiLang(options.locale),
           })
         : null;
       // Opening hook: burn the AI teaser (悬念句) big in the upper third for the
@@ -910,6 +912,7 @@ export async function exportClips(
             translation: transLines.length > 0 ? transLines : undefined,
             aigcBadge: options.aigcLabel ? { durationSec: clipDuration, text: AIGC_BADGE_TEXT[uiLang(options.locale)] } : undefined,
             speakerLabels: options.speakerLabels,
+            lang: uiLang(options.locale),
           }
         );
         subtitleHash = hashRenderInput(ass);
@@ -1178,6 +1181,7 @@ export async function exportClips(
             keywords: clip.keywords,
             forcedBreaks: plan?.breaks,
             highlightHex: options.brand?.highlightColor,
+            lang: uiLang(options.locale),
           });
           await options.renderOverlay!(cutTarget, outPath, payload, clipDuration, webStyle, {
             signal,
@@ -1251,6 +1255,7 @@ export async function exportClips(
                 highlightHex: options.brand?.highlightColor,
                 aigcBadge: options.aigcLabel ? { durationSec: miniDur, text: AIGC_BADGE_TEXT[uiLang(options.locale)] } : undefined,
                 speakerLabels: options.speakerLabels,
+                lang: uiLang(options.locale),
               });
               await writeFile(miniAssPath, miniAss, "utf8");
             }
@@ -1520,7 +1525,11 @@ export async function exportClips(
         // 断行点与词同基:正片整体平移后,跳剪的强制断行时刻也要同步平移;
         // cold-open 接缝处强制断行(钩子行与正片首句不并行)
         const breaks = [...(shift > 0 ? [shift] : []), ...(plan?.breaks ?? []).map((b) => b + shift)];
-        const srt = buildSrt(srtLinesFromWords(relWords, breaks, relTrans, { readability: true, endSec: finalDurationSec }));
+        const srt = buildSrt(srtLinesFromWords(relWords, breaks, relTrans, {
+          readability: true,
+          endSec: finalDurationSec,
+          lang: uiLang(options.locale),
+        }));
         if (srt.trim()) {
           await writeFile(outPath.replace(/\.mp4$/, ".srt"), srt, "utf8").catch(() => {});
         }

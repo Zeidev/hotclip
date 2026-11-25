@@ -5,6 +5,7 @@
  * without ffmpeg; only the caller touches the filesystem.
  */
 import type { Transcript, TranscriptWord } from "../shared/api-types";
+import type { AppLang } from "../shared/ui-lang";
 import { hexToAssColor, hexToAssInline, isValidHex } from "./brand";
 
 export interface AssLayout {
@@ -126,6 +127,58 @@ const BREAK_AFTER_PARTICLE = /(的|了|着|过|地|得|吧|呢|吗|啊|嘛|呀)$
 const LOOKBACK_MIN_FRAC = 0.35;
 
 /**
+ * 拉丁文行尾禁忌词(连词/介词/冠词/系动词)。中文有粒子回退,拉丁文没有:
+ * 「… geldi ve」这种行尾等于把悬空的 `ve` 甩到下一行开头,读起来像断句错。
+ * 只在调用方给了 lang("tr"/"en")时启用——默认路径仍是纯中文粒子规则。
+ */
+const LATIN_LINE_END_STOP: Record<"tr" | "en", Set<string>> = {
+  tr: new Set([
+    "ve", "veya", "ya", "ama", "fakat", "ancak", "ki", "çünkü", "eğer", "ise",
+    "ile", "için", "gibi", "olarak", "de", "da", "mi", "mı", "mu", "mü",
+    "bir", "bu", "şu", "o", "hem", "en", "daha", "ne",
+  ]),
+  en: new Set([
+    "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at", "for",
+    "with", "from", "as", "is", "are", "was", "were", "be", "that", "this", "it",
+  ]),
+};
+
+/** 去掉标点后再比对:ASR 常把逗号粘在词尾(「ve,」)。 */
+function foldStopWord(text: string, lang: "tr" | "en"): string {
+  const bare = text.replace(/[^\p{L}\p{N}]+/gu, "");
+  // 土耳其语折叠:İ→i、I→ı(与 hook-quality 同一套规则)
+  return lang === "tr" ? bare.toLocaleLowerCase("tr") : bare.toLowerCase();
+}
+
+/** 只有 tr/en 有拉丁文行尾规则;zh 与未指定语言返回 undefined。 */
+function latinStopWords(lang: AppLang | undefined): { lang: "tr" | "en"; stop: Set<string> } | undefined {
+  if (lang !== "tr" && lang !== "en") return undefined;
+  return { lang, stop: LATIN_LINE_END_STOP[lang] };
+}
+
+/**
+ * 拉丁文的宽度溢出回退:行尾落在连词/介词上就往前退到最近一个「能收尾」
+ * 的词,退掉的词整体带到下一行(词本身永不拆开)。行尾本来就合法、或退到
+ * 头都不剩像样的行(≥ LOOKBACK_MIN_FRAC)时返回 -1,退回纯宽度切。
+ */
+function latinBreakIndex(
+  line: TranscriptWord[],
+  maxLineUnits: number,
+  stop: Set<string>,
+  lang: "tr" | "en"
+): number {
+  if (!stop.has(foldStopWord(line[line.length - 1].text, lang))) return -1;
+  const min = maxLineUnits * LOOKBACK_MIN_FRAC;
+  let prefix = 0;
+  const prefixUnits = line.map((wd) => (prefix += widthUnits(wd.text)));
+  for (let k = line.length - 1; k >= 0; k--) {
+    if (prefixUnits[k] < min) break;
+    if (!stop.has(foldStopWord(line[k].text, lang))) return k;
+  }
+  return -1;
+}
+
+/**
  * How long a caption line may hold on screen waiting for the next one. A line
  * ends the instant its last word does, which flashes a blank frame between
  * consecutive lines of continuous speech (the default karaoke/keyword styles
@@ -135,12 +188,24 @@ const LOOKBACK_MIN_FRAC = 0.35;
  */
 export const CAPTION_HOLD_MAX_SEC = 0.8;
 
-/** Product defaults for reading speed, not an accuracy/confidence score. */
-export function captionReadingCps(text: string): number {
+/**
+ * 拉丁文(非 CJK)每秒可读字符数:汉字一屏一个词位的信息密度远高于拉丁词,
+ * 20 CPS 是中文口径——搬到 Türkçe/English 上等于默许一行挤到读不完。
+ * 17 是拉丁文的常见可读上限(Netflix 类指南的 17 CPS),土耳其语词更长,
+ * 更需要这个上限。`lang` 缺省(未指定语言)仍按 20——CLI/MCP 老路径不变。
+ */
+const LATIN_READING_CPS: Record<"tr" | "en", number> = { tr: 17, en: 17 };
+
+/**
+ * Product defaults for reading speed, not an accuracy/confidence score.
+ * `lang` only refines the Latin (non-CJK) branch: the script of the text still
+ * wins, so a Chinese line inside a Turkish project keeps the Chinese budget.
+ */
+export function captionReadingCps(text: string, lang?: AppLang): number {
   if (/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text)) return 7;
   if (/\p{Script=Han}/u.test(text)) return 9;
   if (/\p{Script=Hangul}/u.test(text)) return 12;
-  return 20;
+  return lang === "tr" || lang === "en" ? LATIN_READING_CPS[lang] : 20;
 }
 
 export function captionReadableChars(text: string): number {
@@ -151,6 +216,12 @@ export interface CaptionReadabilityOptions {
   readability?: boolean;
   endSec?: number;
   /**
+   * 字幕语言(AppLang)。只影响「拉丁文」那一条路径:行尾禁忌词回退
+   * (ve/bir/ile… 不落行尾)与拉丁文 CPS 预算。缺省 = 老的中文路径,
+   * 输出逐字节不变。
+   */
+  lang?: AppLang;
+  /**
    * Overlap warning floor. Cross-faded jump cuts legitimately overlap captions
    * by the transition length, so the caller raises this when one is in use.
    */
@@ -160,9 +231,15 @@ export interface PlannedCaptionLine { words: TranscriptWord[]; startSec: number;
 
 /** Only display events change: speech/karaoke word timestamps remain intact.
  * Short neighboring lines may merge within width, speaker and splice bounds. */
-export function planReadableCaptions(words: TranscriptWord[], maxUnits: number, forcedBreaks: number[] = [], endSec = Infinity): PlannedCaptionLine[] {
+export function planReadableCaptions(
+  words: TranscriptWord[],
+  maxUnits: number,
+  forcedBreaks: number[] = [],
+  endSec = Infinity,
+  lang?: AppLang
+): PlannedCaptionLine[] {
   const breaks = [...forcedBreaks].filter(Number.isFinite).sort((a, b) => a - b);
-  const grouped = groupWordsIntoLines(words, maxUnits, breaks);
+  const grouped = groupWordsIntoLines(words, maxUnits, breaks, lang);
   const merged: TranscriptWord[][] = [];
   for (const line of grouped) {
     const previous = merged[merged.length - 1];
@@ -179,7 +256,7 @@ export function planReadableCaptions(words: TranscriptWord[], maxUnits: number, 
     const startSec = line[0].startSec;
     const lastEnd = line[line.length - 1].endSec;
     const text = line.map((w) => w.text).join("");
-    const maxCps = captionReadingCps(text);
+    const maxCps = captionReadingCps(text, lang);
     const wanted = Math.max(lastEnd, startSec + 0.7, startSec + captionReadableChars(text) / maxCps);
     const nextStart = merged[i + 1]?.[0].startSec ?? Infinity;
     const splice = breaks.find((b) => b > startSec + 1e-6) ?? Infinity;
@@ -209,14 +286,20 @@ function particleBreakIndex(line: TranscriptWord[], maxLineUnits: number): numbe
  * sentence-final punctuation breaks, clause-boundary (soft-punctuation) breaks
  * once a line is substantial, and forced breaks (e.g. jump-cut splice points,
  * where the silence that used to separate sentences no longer exists).
+ *
+ * `lang` selects the wording rule for a width-overflow break: Chinese backs up
+ * to the nearest particle, Turkish/English to the nearest word that may end a
+ * line. Omitting it keeps the Chinese path exactly as it was.
  */
 export function groupWordsIntoLines(
   words: TranscriptWord[],
   maxLineUnits: number,
-  forcedBreaks: number[] = []
+  forcedBreaks: number[] = [],
+  lang?: AppLang
 ): TranscriptWord[][] {
   const GAP_BREAK_SEC = 0.8;
   const softBreakMin = maxLineUnits * SOFT_BREAK_MIN_FRAC;
+  const latinBreak = latinStopWords(lang);
   const lines: TranscriptWord[][] = [];
   let line: TranscriptWord[] = [];
   let units = 0;
@@ -244,8 +327,22 @@ export function groupWordsIntoLines(
       // breaks are real boundaries — honor them exactly, no look-back.
       let carry: TranscriptWord[] = [];
       if (overflow && !forced && !gapBreak && !speakerBreak) {
-        const k = particleBreakIndex(line, maxLineUnits);
-        if (k >= 0 && k < line.length - 1) carry = line.splice(k + 1);
+        // 行内出现汉字就仍走中文粒子回退:语言参数说的是「这条字幕的语言」,
+        // 一行里混进中文(引用/人名)不该把中文断行规则丢掉。
+        const latin = line.some((t) => CJK_RE.test(t.text)) ? undefined : latinBreak;
+        const useLatin = latin !== undefined;
+        const k = latin
+          ? latinBreakIndex(line, maxLineUnits, latin.stop, latin.lang)
+          : particleBreakIndex(line, maxLineUnits);
+        if (k >= 0 && k < line.length - 1) {
+          const tail = line.slice(k + 1);
+          // 拉丁文特有的兜底:退掉的词若和「进来的这个词」一起还是放不下,
+          // 下一轮就会把连词单独晾成一行——比行尾留个连词更难看。这种情况
+          // 不退,照宽度切(中文粒子路径不受影响,行为不变)。
+          const stranded = useLatin &&
+            tail.reduce((n, t) => n + widthUnits(t.text), 0) + wUnits > maxLineUnits;
+          if (!stranded) carry = line.splice(k + 1);
+        }
       }
       flush();
       if (carry.length > 0) {
@@ -736,8 +833,8 @@ export function buildCaptionAss(
     const maxUnits = captionMaxLineUnits(style, layout);
     // 动态极简与 keyword 同款:先把关键词连成一个词,断块永远不劈开高亮词
     const chunkWords = style === "minimal" ? mergeKeywordWords(words, options.keywords ?? []) : words;
-    const planned = options.readability ? planReadableCaptions(chunkWords, maxUnits, forcedBreaks, options.endSec) : undefined;
-    const units = planned ? planned.map((line) => line.words) : groupWordsIntoLines(chunkWords, maxUnits, forcedBreaks);
+    const planned = options.readability ? planReadableCaptions(chunkWords, maxUnits, forcedBreaks, options.endSec, options.lang) : undefined;
+    const units = planned ? planned.map((line) => line.words) : groupWordsIntoLines(chunkWords, maxUnits, forcedBreaks, options.lang);
     for (let i = 0; i < units.length; i++) {
       const unit = units[i];
       const start = unit[0].startSec - clipStartSec;
@@ -762,8 +859,8 @@ export function buildCaptionAss(
   } else {
     // keyword style: fuse keyword runs first so line breaks can't split them
     const lineWords = style === "keyword" ? mergeKeywordWords(words, options.keywords ?? []) : words;
-    const planned = options.readability ? planReadableCaptions(lineWords, layout.maxLineUnits, forcedBreaks, options.endSec) : undefined;
-    const lines = planned ? planned.map((line) => line.words) : groupWordsIntoLines(lineWords, layout.maxLineUnits, forcedBreaks).filter((l) => l.length > 0);
+    const planned = options.readability ? planReadableCaptions(lineWords, layout.maxLineUnits, forcedBreaks, options.endSec, options.lang) : undefined;
+    const lines = planned ? planned.map((line) => line.words) : groupWordsIntoLines(lineWords, layout.maxLineUnits, forcedBreaks, options.lang).filter((l) => l.length > 0);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const start = line[0].startSec - clipStartSec;
