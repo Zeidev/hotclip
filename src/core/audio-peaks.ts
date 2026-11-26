@@ -9,6 +9,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { resolveFfmpegPath } from "./binaries";
 import { ffmpegAudioStreamSpecifier } from "./probe";
+import { mapToOutputTime } from "./reframe";
 
 const execFileAsync = promisify(execFile);
 
@@ -111,6 +112,37 @@ export function findPeakEvents(
   }
   if (cur) events.push(cur);
   return events.sort((a, b) => b.peak - a.peak).slice(0, maxEvents);
+}
+
+/** 峰值事件的两种时间坐标:源片绝对时间(要拿它回源片切刀)与输出时间(打点)。 */
+export interface PeakEventPair {
+  /** 源片绝对秒——爆点闪现回源片切迷你片用它。 */
+  srcSec: number;
+  /** 成片输出时间轴秒——运镜强调/音效打点用它。 */
+  outSec: number;
+}
+
+/**
+ * 把峰值事件配成 (源时间, 输出时间)。峰值轨是**绝对源时间**(extractPeaks 的
+ * 第一块就是 clipStartSec),而 mapToOutputTime 收的是**切片相对**时间——
+ * 这里先减掉 clipStartSec 再映射;直接把绝对时间喂进去会多叠一次偏移,
+ * 每个事件都落到所有保留段之外,成对结果恒为空(闪现从不触发)。
+ * 被剪掉的空隙里的事件没有输出时间,直接丢。纯函数。
+ */
+export function mapPeakEvents(
+  track: PeakTrack,
+  segments: Array<{ startSec: number; endSec: number }> | null,
+  clipStartSec: number,
+  clipDurationSec: number
+): PeakEventPair[] {
+  const pairs: PeakEventPair[] = [];
+  for (const e of findPeakEvents(track)) {
+    const relSec = e.atSec - clipStartSec;
+    const outSec = segments ? mapToOutputTime(relSec, segments, clipStartSec) : relSec;
+    if (outSec === null || outSec < 0 || outSec > clipDurationSec) continue;
+    pairs.push({ srcSec: e.atSec, outSec });
+  }
+  return pairs;
 }
 
 /** Decode [startSec, endSec] to mono 16k PCM and fold into a peak track. */

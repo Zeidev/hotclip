@@ -1,12 +1,28 @@
 import { describe, it, expect } from "vitest";
-import { planFlashForward, FLASH_LEAD_SEC, FLASH_TAIL_SEC, FLASH_MIN_SEC } from "../coldopen";
+import { planFlashForward, FLASH_LEAD_SEC, FLASH_TAIL_SEC, FLASH_MIN_SEC, FLASH_SKIP_NEAR_START_SEC } from "../coldopen";
 import { missingHookPayoffs } from "../qa";
+import { mapPeakEvents, type PeakTrack } from "../audio-peaks";
+import { mapToOutputTime } from "../reframe";
 
 describe("planFlashForward(爆点闪现)", () => {
   const kept = [
     { startSec: 100, endSec: 130 },
     { startSec: 140, endSec: 160 },
   ];
+
+  it("峰值轨→闪现窗:跳剪片上也能取到窗(旧映射把每个峰都丢掉了)", () => {
+    // 切片 100s 起、保留 [100,130]+[140,160];峰值轨第一块就在 100s(绝对源时间)
+    const values = new Float32Array(200);
+    values[100] = 0.9; // 150s — 第二段内,输出 30+10=40s
+    const track: PeakTrack = { values, startSec: 100, hopSec: 0.5 };
+    const farEnough = mapPeakEvents(track, kept, 100, 60)
+      .filter((p) => p.outSec >= FLASH_SKIP_NEAR_START_SEC)
+      .map((p) => p.srcSec);
+    expect(farEnough).toEqual([150]);
+    expect(planFlashForward(farEnough, kept)).not.toBeNull();
+    // 旧写法:绝对时间直接喂映射 → 偏移多叠一次 → 空表 → 闪现永不触发
+    expect(mapToOutputTime(150, kept, 100)).toBeNull();
+  });
 
   it("在保留区间内围绕峰值取闪现窗(峰前铺垫+峰后余韵)", () => {
     const plan = planFlashForward([150], kept);

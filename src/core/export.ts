@@ -40,7 +40,7 @@ import {
   withinOnePiece,
   type ClipPiece,
 } from "../shared/pieces";
-import { extractPeaks, findPeakEvents } from "./audio-peaks";
+import { extractPeaks, findPeakEvents, mapPeakEvents } from "./audio-peaks";
 import { genrePauseGapSec } from "./genre";
 import {
   planSfxCues,
@@ -982,14 +982,7 @@ export async function exportClips(
       }
       // (源时间, 输出时间) 成对保留:运镜强调/音效打点吃输出时间,
       // 爆点闪现要回源片切那一刀、吃源时间
-      const peakEventPairs = clipPeaks
-        ? findPeakEvents(clipPeaks)
-            .map((e) => ({
-              srcSec: e.atSec,
-              outSec: plan ? mapToOutputTime(e.atSec, plan.segments, clip.startSec) : e.atSec - clip.startSec,
-            }))
-            .filter((p): p is { srcSec: number; outSec: number } => p.outSec !== null && p.outSec >= 0 && p.outSec <= clipDuration)
-        : [];
+      const peakEventPairs = clipPeaks ? mapPeakEvents(clipPeaks, plan?.segments ?? null, clip.startSec, clipDuration) : [];
       const peakEventsOut = peakEventPairs.map((p) => p.outSec);
       // 自动运镜:只对竖屏画面有意义(音频波形图和横屏原片不做);
       // 帧率未知就不开——zoompan 会把素材重采样到 25fps。
@@ -1087,16 +1080,14 @@ export async function exportClips(
           }
         }
       }
-      if (cacheHit) {
-        renderCache = "hit";
-        videoMode = "cached";
-        onProgress?.({ current: i + 1, total: totalUnits, clipId: clip.id, stage: "cutting", fraction: 1 });
-      } else {
+      // 正片渲染收成一个可重入的函数:高潮前置要求正片和迷你片走同一编码
+      // 路径(见下),缓存/直通拿来的正片得能按同一参数重出一版。
+      const renderBody = async (target: string, forceEncode = false): Promise<"copy" | "encode"> => {
         if (audioOnly) {
           // audiogram:深色底+品牌色波形合成画面,单段/跳剪统一(波形随剪好的音频生成)
           await runAudiogram(
             inputPath,
-            cutTarget,
+            target,
             baseSegments,
             {
               // 与 ASS layout 的竖/横选择严格一致,playRes 才对得上
@@ -1113,39 +1104,48 @@ export async function exportClips(
             signal,
             onTimeSec
           );
-        } else if (baseSegments.length > 1) {
+          return "encode";
+        }
+        if (baseSegments.length > 1) {
           // Colour match is measured per piece (2 samples/s, cheap) and applied
           // only where the pieces are visibly apart; failures leave the piece
           // untouched.
           const pieceGrade = options.colorMatch !== false && !audioOnly
             ? planPieceColorGrades(await measurePieceColors(inputPath, baseSegments, signal))
             : undefined;
-          await cutJumpClip(inputPath, cutTarget, clip.startSec, baseSegments, { ...cutOptions, punchIn, pieceGrade, transitionSec: options.transitionSec }, signal, onTimeSec);
-        } else {
-          // Single kept segment: copy H.264 video only when its start is proven
-          // keyframe-aligned and no pixel-changing filter is active.
-          const range = baseSegments[0];
-          // First use a synthetic aligned timestamp to check codec/filter
-          // eligibility; only pay for ffprobe when the edit could actually copy.
-          const copyCandidate = srcInfo
-            ? canCopyVideoStream(srcInfo, range.startSec, cutOptions, [range.startSec])
-            : false;
-          const keyframes = copyCandidate
-            ? await probeVideoKeyframes(inputPath, range.startSec, srcInfo?.videoStreamIndex).catch(() => [] as number[])
-            : [];
-          const videoCopy = copyCandidate && srcInfo
-            ? canCopyVideoStream(srcInfo, range.startSec, cutOptions, keyframes)
-            : false;
-          videoMode = await cutClip(
-            inputPath,
-            cutTarget,
-            range.startSec,
-            range.endSec,
-            { ...cutOptions, videoCopy },
-            signal,
-            onTimeSec
-          );
+          await cutJumpClip(inputPath, target, clip.startSec, baseSegments, { ...cutOptions, punchIn, pieceGrade, transitionSec: options.transitionSec }, signal, onTimeSec);
+          return "encode";
         }
+        // Single kept segment: copy H.264 video only when its start is proven
+        // keyframe-aligned and no pixel-changing filter is active.
+        const range = baseSegments[0];
+        // First use a synthetic aligned timestamp to check codec/filter
+        // eligibility; only pay for ffprobe when the edit could actually copy.
+        const copyCandidate = !forceEncode && srcInfo
+          ? canCopyVideoStream(srcInfo, range.startSec, cutOptions, [range.startSec])
+          : false;
+        const keyframes = copyCandidate
+          ? await probeVideoKeyframes(inputPath, range.startSec, srcInfo?.videoStreamIndex).catch(() => [] as number[])
+          : [];
+        const videoCopy = copyCandidate && srcInfo
+          ? canCopyVideoStream(srcInfo, range.startSec, cutOptions, keyframes)
+          : false;
+        return await cutClip(
+          inputPath,
+          target,
+          range.startSec,
+          range.endSec,
+          { ...cutOptions, videoCopy },
+          signal,
+          onTimeSec
+        );
+      };
+      if (cacheHit) {
+        renderCache = "hit";
+        videoMode = "cached";
+        onProgress?.({ current: i + 1, total: totalUnits, clipId: clip.id, stage: "cutting", fraction: 1 });
+      } else {
+        videoMode = await renderBody(cutTarget);
         if (cacheKey && options.renderCacheDir) {
           await storeRenderCache(
             options.renderCacheDir,
@@ -1273,7 +1273,17 @@ export async function exportClips(
             const miniCutOptions = miniTrack
               ? { ...sourceStreams, trackPlan: miniTrack, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder }
               : { ...sourceStreams, uiCrop, vertical: options.vertical, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder };
-            await rename(outPath, bodyPath);
+            // 迷你片是新编码的,正片若来自 -c:v copy 或缓存,两者的 SPS/PPS
+            // 不同——`-f concat -c copy` 只发布第一段(迷你片)的参数集,正片
+            // 帧按错误的参数解码,接缝处就是花屏/卡顿。只在真要前置时把正片
+            // 按编码路径重出一版(这次重编码是接缝正确的代价)。
+            if (videoMode === "encode") {
+              await rename(outPath, bodyPath);
+            } else {
+              await renderBody(bodyPath, true);
+              await rm(outPath, { force: true });
+              videoMode = "encode";
+            }
             await cutClip(inputPath, miniPath, coPlan.startSec, coPlan.endSec, miniCutOptions, signal);
             // 硬切拼接(通行做法);AIGC 隐式标识补到最终容器上
             await concatClips([miniPath, bodyPath], outPath, signal, aigcMeta);
@@ -1283,6 +1293,7 @@ export async function exportClips(
           })().catch(async (e) => {
             if (signal?.aborted) throw e;
             // 回退:正片就是最终产物(rename 可能未发生或已发生,两种都兜)
+            console.error(`cold-open assembly failed for clip ${clip.id}, shipped the plain body:`, e);
             await rename(bodyPath, outPath).catch(() => {});
             await rm(miniPath, { force: true }).catch(() => {});
             return false;
