@@ -23,7 +23,17 @@ export interface ColdOpenPlan {
 export const COLD_OPEN_MIN_SEC = 1;
 /** 超过 3-4 秒还没进正片就开始掉人(OpusClip 方法论:2-2.5 秒内交付完毕)。 */
 export const COLD_OPEN_MAX_SEC = 4;
-/** 爆点距开头太近时再前置一遍显得机械重复,通行建议 <10-15 秒就跳过。 */
+/**
+ * 爆点距开头太近时再前置一遍显得机械重复,通行建议 <10-15 秒就跳过。
+ *
+ * 实测(本机 13 个项目 / 162 条真实候选):153 条钩子能在词流里定位,其中 149 条
+ * 命中在切片开头 1 秒内(146 条逐字就是切片首句,首词延迟 0.00s),只有 4 条落在
+ * 1-8 秒。原因是转写稿模式的选段提示词要求「钩子原文 = 切片的开场句」(见
+ * highlight/prompt.ts),切片本身就从句首开剪——此时前置等于把开场句连着重播。
+ * 所以这条路径在真实素材上基本只在提示词被违反时才会触发:闪现冷开场
+ * (planFlashForward)才是主力,钩子句前置是兜底(见 __tests__/coldopen.test.ts
+ * 里两条实测样例的钉桩测试)。
+ */
 export const COLD_OPEN_SKIP_NEAR_START_SEC = 10;
 
 /**
