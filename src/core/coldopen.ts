@@ -30,11 +30,27 @@ export const COLD_OPEN_MAX_SEC = 4;
  * 命中在切片开头 1 秒内(146 条逐字就是切片首句,首词延迟 0.00s),只有 4 条落在
  * 1-8 秒。原因是转写稿模式的选段提示词要求「钩子原文 = 切片的开场句」(见
  * highlight/prompt.ts),切片本身就从句首开剪——此时前置等于把开场句连着重播。
- * 所以这条路径在真实素材上基本只在提示词被违反时才会触发:闪现冷开场
- * (planFlashForward)才是主力,钩子句前置是兜底(见 __tests__/coldopen.test.ts
- * 里两条实测样例的钉桩测试)。
+ * 所以拿 hook 当前置素材等于把开场句连着重播(守卫拒掉是对的);前置素材改从
+ * coldOpenQuote 取(见下),hook 只在它缺席时兜底——那时这条路径基本只在提示词被
+ * 违反时才会触发,闪现冷开场(planFlashForward)才是主力。两条实测样例钉在
+ * __tests__/coldopen.test.ts 里。
  */
 export const COLD_OPEN_SKIP_NEAR_START_SEC = 10;
+
+/**
+ * 前置迷你片用哪段文字(纯函数):
+ * - 选段输出里明确标了 coldOpenQuote(「片段中段最炸、但不在开头的一句」)就用它;
+ *   这条字段存在的理由:转写模式的 hook 按提示词定义就是**片段首句**,
+ *   拿它当前置预览等于把开场句重播一遍(planColdOpen 的 near-start 守卫会拒掉)。
+ * - 字段缺席/空白 → 退回 hook,与加这个字段之前**逐字一致**(旧项目文件、
+ *   moment 通道的视觉描述都走这条)。
+ */
+export function coldOpenQuoteText(meta?: {
+  hook?: string;
+  coldOpenQuote?: string;
+}): string | undefined {
+  return (meta?.coldOpenQuote ?? "").trim() || (meta?.hook ?? "").trim() || undefined;
+}
 
 /**
  * 决定这条切片的 cold-open 片段:在切片词流里反查钩子句(与选段同一套

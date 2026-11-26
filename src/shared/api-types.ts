@@ -346,6 +346,11 @@ export interface HighlightCandidate {
   title: string;
   /** The opening hook line the clip leads with. */
   hook: string;
+  /**
+   * 可选:片段里最炸、但不在开头的一句(逐字原文)。cold-open 前置用——
+   * hook 是片段首句,不能拿来当前置预览;缺省 = 没这一句(行为与旧版一致)。
+   */
+  coldOpenQuote?: string;
   /** Virality ranking score 0-100 — a RANKER, not a truth claim. */
   score: number;
   /** One-line reason ("why this clip") — the evidence chain seed. */

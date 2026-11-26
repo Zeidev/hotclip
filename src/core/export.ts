@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 import { cutClip, cutJumpClip, concatClips, type CutOptions } from "./cut";
 import { measurePieceColors, planPieceColorGrades } from "./color-match";
 import { detectFileOnsets } from "./beat";
-import { planColdOpen, planFlashForward, FLASH_SKIP_NEAR_START_SEC } from "./coldopen";
+import { planColdOpen, planFlashForward, coldOpenQuoteText, FLASH_SKIP_NEAR_START_SEC } from "./coldopen";
 import { computeJumpCut, BREATH_PAD_SEC } from "./gaps";
 import { perturbLayout } from "../shared/perturb";
 import { clampTranslationLines, remapTranslationLines, type TranslationLine } from "./translate";
@@ -131,6 +131,8 @@ export interface ExportClipSpec {
   /** Evidence-chain fields carried into clips.json for CMS/matrix pipelines. */
   meta?: {
     hook: string;
+    /** 可选:片段中段最炸的一句(逐字原文),cold-open 前置优先用它。 */
+    coldOpenQuote?: string;
     score: number;
     reason: string;
     text: string;
@@ -1209,8 +1211,12 @@ export async function exportClips(
       let coldOpenPlan: ReturnType<typeof planColdOpen> = null;
       // 迷你片是「爆点闪现」而非钩子句时为 true(回执要区分两种开场形态)
       let flashForwardUsed = false;
-      // 钩子文本在 meta.hook(证据链字段),不在顶层——读错位置会让高潮前置永远不触发
-      const coldOpenHook = clip.meta?.hook?.trim();
+      // 冷开场预览句的优先级:coldOpenQuote(选段时明确标出的「中段最炸的一句」)
+      // 优先;它缺席时退回 meta.hook,与旧版逐字一致。两者都在 meta(证据链字段),
+      // 不在顶层——读错位置会让高潮前置永远不触发。
+      // 注意 meta.hook 在无台词品类里是画面描述而非引文(见 moment prompt),
+      // 那种情况 matchQuote 本就匹配不到,和改前一样安全地回退成不前置。
+      const coldOpenHook = coldOpenQuoteText(clip.meta);
       if (!audioOnly && !webStyle && (options.flashForward || clip.flashForward || options.coldOpen)) {
         // 爆点闪现优先:两个开关同开时,视觉钩子是更强的差异化(全网仅
         // 0.04% 切片有 visual hook);闪不出来(全程无显著峰)回退钩子句。

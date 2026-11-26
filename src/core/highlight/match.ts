@@ -130,6 +130,11 @@ export interface RawPart {
 export interface RawSelection {
   title: string;
   hook: string;
+  /**
+   * 可选:片段里最炸、但不在开头的一句(逐字原文)。给 cold-open 前置用——
+   * hook 按提示词定义就是片段首句,它自身不能当预览素材。缺省/空 = 没有。
+   */
+  coldOpenQuote?: string;
   score: number;
   reason: string;
   startSegmentId: number;

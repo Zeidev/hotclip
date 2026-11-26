@@ -1179,6 +1179,8 @@ ipcMain.handle("hotclip:export-clips", async (event, filePath: unknown, clips: u
       keywords: c.keywords,
       meta: {
         hook: c.hook,
+        // 冷开场预览句(cold-open):有它才用,没它沿用 meta.hook(旧行为)
+        coldOpenQuote: c.coldOpenQuote,
         score: c.score,
         reason: c.reason,
         text: c.text,

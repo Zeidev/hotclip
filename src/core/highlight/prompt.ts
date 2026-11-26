@@ -59,6 +59,7 @@ export const HIGHLIGHT_SYSTEM_PROMPT_ZH = `你是一位顶级短视频切片操�
 - 痛点型:"你是不是也X"、"90%的人不知道X"
 寒暄、自我介绍、"接下来我们看下一个"、慢热铺垫——一律不能当片段开头。
 开头抛出的悬念、问题或承诺,必须在片段里给出答案:只挖坑不填坑的片段,观众划走,系统也按完播排序给分。宁可把兑现答案的那一句一起框进来。
+如果全片最炸的那一句在片段中段(不是第一句),把它逐字抄进 coldOpenQuote:系统会把它剪成片头小预告,再切回完整正片。开头第一句已经承担钩子时就留空字符串。
 
 【长度】
 时长 8~40 秒(对应逐句稿里约 2~8 句)。
@@ -131,6 +132,7 @@ A clip's opening sentence must carry the hook. Patterns that stop the scroll:
 - Pain point: "are you also X?", "90% of people don't know X"
 Greetings, self-introductions, "next up let's look at…", slow build-ups — never open a clip on these.
 Whatever the opening promises — a mystery, a question, a claim — must be answered inside the clip: viewers swipe on an unfilled promise, and platforms rank on watch-through. Frame the line that pays it off into the clip.
+If the single strongest line sits later in the clip rather than first, copy it verbatim into coldOpenQuote: the system cuts it into a short pre-roll before the full clip. Leave it an empty string when the opening sentence already carries the hook.
 
 【Length】
 Length 8–40 seconds (roughly 2–8 transcript sentences).
@@ -203,6 +205,7 @@ Kesitin açılış cümlesi kancayı kendi taşımalı. Türkçede parmağı dur
 - Dert noktası: "Sen de … mı yaşıyorsun?", "İnsanların %90'ı bunu bilmiyor"
 Selamlama, kendini tanıtma, "şimdi sıradaki konuya geçelim", yavaş giriş — kesitin açılışı bunlar asla olmaz.
 Açılışın kurduğu söz — merak, soru ya da iddia — kesitin içinde cevaplanmalı: sözünü tutmayan kesitte izleyici kaydırıp gider, platform da sonuna kadar izlenmeye göre sıralıyor. Cevabı veren cümleyi de kesite al.
+En çarpıcı cümle kesitin ilk cümlesi değil de ortasında/ilerisindeyse onu birebir coldOpenQuote alanına yaz: sistem onu tam kesitten önce kısa bir ön açılış olarak keser. Açılış cümlesi kancayı zaten taşıyorsa boş dize bırak.
 
 【Süre】
 Süre 8–40 saniye (kabaca 2–8 cümle).
@@ -512,6 +515,19 @@ const PARTS_SHAPE_TR = `Bir kesit gerçekten birleştirme gerektiriyorsa (yalnı
   {"startSegmentId": 88, "endSegmentId": 90, "quoteStart": "...", "quoteEnd": "..."}
 ]`;
 
+/**
+ * 可选字段 coldOpenQuote 的说明。与 parts 同理单独列出:塞进 OUTPUT_SHAPE
+ * 会让模型以为每条都必须给,而这条字段只在「最炸的一句不在开头」时才有值。
+ */
+const COLD_OPEN_SHAPE_ZH = `可选的 coldOpenQuote 字段:片段里最炸的一句的逐字原文,但只有它不是片段第一句时才写——系统会把它剪成片头小预告;第一句已经承担钩子就写空字符串:
+"coldOpenQuote": ""`;
+
+const COLD_OPEN_SHAPE_EN = `Optional coldOpenQuote field: the verbatim text of the clip's most striking line, written only when it is NOT the clip's first sentence — the system cuts it into a short pre-roll at the top. Write an empty string when the first sentence already carries the hook:
+"coldOpenQuote": ""`;
+
+const COLD_OPEN_SHAPE_TR = `İsteğe bağlı coldOpenQuote alanı: kesitin içindeki en çarpıcı cümlenin birebir hali, ama yalnızca kesitin ilk cümlesi değilse yaz — sistem onu başa kısa bir ön açılış olarak keser. Açılış cümlesi kancayı zaten taşıyorsa boş dize yaz:
+"coldOpenQuote": ""`;
+
 function fmtClock(sec: number): string {
   const m = Math.floor(sec / 60);
   const ss = Math.floor(sec % 60);
@@ -630,7 +646,9 @@ ${OUTPUT_SHAPE}
 
 ${PARTS_SHAPE_ZH}
 
-字段说明:title=适合发布的短标题(≤20字);hook=开头钩子句原文;score=0-100 相对排序分;reason=一句话为什么能爆;quoteStart/quoteEnd=片段首句开头/末句结尾的逐字原文;keywords=该片段里 3-5 个最有冲击力的词,必须逐字取自片段原文(用于字幕划重点)。
+${COLD_OPEN_SHAPE_ZH}
+
+字段说明:title=适合发布的短标题(≤20字);hook=开头钩子句原文;coldOpenQuote=片段里最炸的一句的逐字原文,但只有当它不是片段第一句时才填(系统剪成片头小预告),否则空字符串;score=0-100 相对排序分;reason=一句话为什么能爆;quoteStart/quoteEnd=片段首句开头/末句结尾的逐字原文;keywords=该片段里 3-5 个最有冲击力的词,必须逐字取自片段原文(用于字幕划重点)。
 要求:按 score 从高到低排;片段互不重叠。`;
   }
   if (lang === "tr") {
@@ -644,7 +662,9 @@ ${OUTPUT_SHAPE}
 
 ${PARTS_SHAPE_TR}
 
-Alanlar: title = yayına hazır kısa başlık (≤ 8 kelime); hook = kesitin açılışındaki kanca cümlesinin aynen hali; score = 0-100 göreli sıralama puanı; reason = tek cümlede neden izlenir; quoteStart/quoteEnd = kesitin ilk cümlesinin başı ve son cümlesinin sonu, birebir; keywords = kesitin içindeki en çarpıcı 3-5 kelime, mutlaka dökümden birebir kopyalanmalı (altyazıda vurgu için kullanılır).
+${COLD_OPEN_SHAPE_TR}
+
+Alanlar: title = yayına hazır kısa başlık (≤ 8 kelime); hook = kesitin açılışındaki kanca cümlesinin aynen hali; coldOpenQuote = kesitin içindeki en çarpıcı cümlenin birebir hali, ama yalnızca kesitin ilk cümlesi değilse (sistem onu başa kısa bir ön açılış olarak keser), değilse boş dize; score = 0-100 göreli sıralama puanı; reason = tek cümlede neden izlenir; quoteStart/quoteEnd = kesitin ilk cümlesinin başı ve son cümlesinin sonu, birebir; keywords = kesitin içindeki en çarpıcı 3-5 kelime, mutlaka dökümden birebir kopyalanmalı (altyazıda vurgu için kullanılır).
 score yüksekten aşağıya sırala; kesitler birbiriyle çakışmasın.`;
   }
   return `${scope ? `This round you get only part ${scope.index}/${scope.total} of the transcript: pick from this part only — other parts are covered by other rounds, so don't save slots for them.\n` : ""}Pick at most ${maxClips} clip candidates with the highest viral potential from the transcript below.
@@ -657,7 +677,9 @@ ${OUTPUT_SHAPE}
 
 ${PARTS_SHAPE_EN}
 
-Fields: title = a post-ready short title (≤ 12 words); hook = the verbatim opening hook line; score = 0-100 relative ranking; reason = one line on why it can go viral; quoteStart/quoteEnd = verbatim opening/closing words of the clip; keywords = the 3-5 punchiest words/phrases inside the clip, copied verbatim (used to emphasize caption keywords).
+${COLD_OPEN_SHAPE_EN}
+
+Fields: title = a post-ready short title (≤ 12 words); hook = the verbatim opening hook line; coldOpenQuote = the verbatim text of the clip's single most striking line, ONLY when it is not the clip's first sentence (the system cuts it into a short pre-roll at the top), otherwise an empty string; score = 0-100 relative ranking; reason = one line on why it can go viral; quoteStart/quoteEnd = verbatim opening/closing words of the clip; keywords = the 3-5 punchiest words/phrases inside the clip, copied verbatim (used to emphasize caption keywords).
 Sort by score descending; clips must not overlap.`;
 }
 

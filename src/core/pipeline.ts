@@ -268,6 +268,7 @@ export async function autoClip(videoPath: string, cfg: AutoClipConfig): Promise<
       keywords: c.keywords,
       meta: {
         hook: c.hook,
+        coldOpenQuote: c.coldOpenQuote,
         score: c.score,
         reason: c.reason,
         text: c.text,

@@ -3,12 +3,14 @@ import {
   planColdOpen,
   planFlashForward,
   flashWindow,
+  coldOpenQuoteText,
   COLD_OPEN_MAX_SEC,
   COLD_OPEN_MIN_SEC,
   FLASH_LEAD_SEC,
   FLASH_TAIL_SEC,
   FLASH_MAX_SEC,
 } from "../coldopen";
+import { parseSelections } from "../highlight/detect";
 import type { TranscriptWord } from "../../shared/api-types";
 
 /** 每字 0.5s 的等宽词流,从 startSec 起。 */
@@ -205,5 +207,76 @@ describe("planFlashForward / flashWindow(爆点闪现窗)", () => {
     ];
     const p = planFlashForward([106, 110], cut, [at("段内", 110.0, 110.9)])!;
     expect(p.startSec).toBeCloseTo(110.0, 3);
+  });
+});
+
+// coldOpenQuote(选段输出里「片段中段最炸、但不在开头」的一句)出现在 2026-11:
+// 转写模式的 hook 按提示词定义就是片段首句(见 highlight/prompt.ts 的字段说明),
+// 拿它当前置预览只会撞上 near-start 守卫,所以另开一条可选字段。下面钉住
+// 「字段缺席 = 旧行为逐字不变」和「字段有值 = 真正前置中段那句」两端。
+describe("coldOpenQuote(cold-open 预览句的选择与回退)", () => {
+  const clipStart = 100;
+  const clipWords = [
+    ...words("今天给大家带来一款超级好用的纸巾", 100), // 15 字 ≈ 7.5s 铺垫
+    ...words("直接倒半杯水都不带渗", 120), // 中段爆句
+  ];
+
+  it("字段缺席/空白 → 退回 hook,与加字段之前逐字同一条字符串", () => {
+    expect(coldOpenQuoteText({ hook: "直接倒半杯水都不带渗" })).toBe("直接倒半杯水都不带渗");
+    expect(coldOpenQuoteText({ hook: "直接倒半杯水都不带渗", coldOpenQuote: "   " })).toBe(
+      "直接倒半杯水都不带渗"
+    );
+    expect(coldOpenQuoteText({})).toBeUndefined();
+    expect(coldOpenQuoteText(undefined)).toBeUndefined();
+    // 回退后的输入与旧调用点完全一致 → planColdOpen 结果也必须一致(空 hook → null)
+    expect(planColdOpen(clipWords, coldOpenQuoteText({ hook: "  " }) ?? "", clipStart)).toBeNull();
+  });
+
+  it("字段有值 → 优先用它,前置的是中段那句而不是首句", () => {
+    const meta = {
+      hook: "今天给大家带来一款超级好用的纸巾", // 片段首句(按旧语义拿它前置必被守卫拒掉)
+      coldOpenQuote: "直接倒半杯水都不带渗",
+    };
+    expect(coldOpenQuoteText(meta)).toBe("直接倒半杯水都不带渗");
+    const p = planColdOpen(clipWords, coldOpenQuoteText(meta)!, clipStart);
+    expect(p).not.toBeNull();
+    expect(p!.startSec).toBeCloseTo(120, 3);
+  });
+
+  it("字段给的就是开头句 → near-start 守卫照旧拒绝(新字段不能绕过产品决定)", () => {
+    const meta = {
+      hook: "今天给大家带来一款超级好用的纸巾",
+      coldOpenQuote: "今天给大家带来一款超级好用的纸巾",
+    };
+    expect(planColdOpen(clipWords, coldOpenQuoteText(meta)!, clipStart)).toBeNull();
+  });
+
+  it("hook 是画面描述(moment 通道)、无新字段 → 匹配不到 → null,与今天一致", () => {
+    const visual = { hook: "Şüpheli bakış, 'you sure' diyaloğu." };
+    expect(planColdOpen(clipWords, coldOpenQuoteText(visual)!, clipStart)).toBeNull();
+  });
+});
+
+describe("parseSelections:coldOpenQuote 解析", () => {
+  const base = {
+    title: "t",
+    hook: "h",
+    score: 80,
+    reason: "r",
+    startSegmentId: 1,
+    endSegmentId: 2,
+    quoteStart: "a",
+    quoteEnd: "b",
+    keywords: [],
+  };
+  const parse = (clip: Record<string, unknown>) => parseSelections(JSON.stringify({ clips: [clip] }))[0];
+
+  it("新字段原样带进 RawSelection", () => {
+    expect(parse({ ...base, coldOpenQuote: "中段那句" }).coldOpenQuote).toBe("中段那句");
+  });
+  it("缺省或空白 → undefined(下游走 hook 回退)", () => {
+    expect(parse(base).coldOpenQuote).toBeUndefined();
+    expect(parse({ ...base, coldOpenQuote: "   " }).coldOpenQuote).toBeUndefined();
+    expect(parse({ ...base, coldOpenQuote: null }).coldOpenQuote).toBeUndefined();
   });
 });
