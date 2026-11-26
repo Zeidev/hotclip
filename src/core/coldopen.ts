@@ -39,9 +39,16 @@ export function planColdOpen(
 ): ColdOpenPlan | null {
   const hook = (hookText ?? "").trim();
   if (!hook || clipWords.length === 0) return null;
-  const m = matchQuote(buildTokenIndex(clipWords), hook, hook);
+  const index = buildTokenIndex(clipWords);
+  let m = matchQuote(index, hook, hook);
+  if (m && m.startSec - clipStartSec < COLD_OPEN_SKIP_NEAR_START_SEC) {
+    // 同一句话在开头也出现过(转写复读/口头禅)时,第一次命中的是开场那次——
+    // 那次确实「重复没意义」,但中段这次仍是全片最炸的钩子句:从窗口外再
+    // 找一次,别把合法候选白白丢掉。词跨窗口边界命中时按仍然太近处理。
+    m = matchQuote(index, hook, hook, clipStartSec + COLD_OPEN_SKIP_NEAR_START_SEC);
+    if (m && m.startSec - clipStartSec < COLD_OPEN_SKIP_NEAR_START_SEC) m = null;
+  }
   if (!m) return null;
-  if (m.startSec - clipStartSec < COLD_OPEN_SKIP_NEAR_START_SEC) return null;
 
   let endSec = m.endSec;
   if (endSec - m.startSec > COLD_OPEN_MAX_SEC) {

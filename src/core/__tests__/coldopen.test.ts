@@ -35,6 +35,31 @@ describe("planColdOpen", () => {
     expect(planColdOpen(near, "爆点句在这里", 100)).toBeNull();
   });
 
+  it("同一句在开头也出现过:前置中段那次,不把合法候选当开场丢掉", () => {
+    const hook = "直接倒半杯水都不带渗";
+    const repeat = [
+      ...words(hook, 101), // 101s:已经是开场,这次重复没意义
+      ...words("然后我们看看这个纸的厚度", 107),
+      ...words(hook, 120), // 120s:中段这次才是全片最炸的钩子句
+    ];
+    const p = planColdOpen(repeat, hook, 100);
+    expect(p).not.toBeNull();
+    expect(p!.startSec).toBeCloseTo(120, 3);
+    expect(p!.endSec - p!.startSec).toBeLessThanOrEqual(COLD_OPEN_MAX_SEC + 1e-6);
+  });
+
+  it("两次都在窗口内 → 仍然跳过(词跨窗口边界命中按太近处理)", () => {
+    const hook = "直接倒半杯水都不带渗";
+    const allNear = [...words(hook, 101), ...words("补一句", 106.5), ...words(hook, 108)];
+    expect(planColdOpen(allNear, hook, 100)).toBeNull();
+  });
+
+  it("中段那次短于 MIN(1s)→ 不前置", () => {
+    const hook = "直接倒半杯水都不带渗";
+    const quick = [...words(hook, 101), ...words("中间内容", 107), ...words(hook, 120, 0.08)];
+    expect(planColdOpen(quick, hook, 100)).toBeNull();
+  });
+
   it("钩子定位失败/空钩子/过短片段 → null(宁可不做不可做错)", () => {
     expect(planColdOpen(clipWords, "转写里根本没有这句", clipStart)).toBeNull();
     expect(planColdOpen(clipWords, "", clipStart)).toBeNull();
