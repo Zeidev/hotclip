@@ -1221,7 +1221,10 @@ export async function exportClips(
             .map((p) => p.srcSec);
           coldOpenPlan = planFlashForward(
             farEnough,
-            plan ? plan.segments : [{ startSec: clip.startSec, endSec: clip.endSec }]
+            plan ? plan.segments : [{ startSec: clip.startSec, endSec: clip.endSec }],
+            // 词流只用于把闪现窗扩到「一整句」——0.7 秒的固定窗只截到半句
+            // (实测「…anlatsam」),观众看不懂,冷开场等于噪声
+            clip.words ?? []
           );
           flashForwardUsed = coldOpenPlan !== null;
         }
