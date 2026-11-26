@@ -235,6 +235,7 @@ export const zh = {
     subtitleError_size: "字幕文件超过 5 MB，请导出较小的字幕文件后重试。",
     subtitleError_encoding: "无法读取字幕编码，请将文件另存为 UTF-8 后重试。",
     subtitleError_cue: "字幕段落为空或格式有误，请检查时间码及段落间的空行。",
+    subtitleError_timestamps: "这是行首带时间码的文稿(每行形如「[00:41] 正文」),不是 SRT 或 WebVTT——没有段落的起止时间码。请把字幕导出为 SRT / WebVTT 后再导入。",
     subtitleError_empty: "未找到有效字幕，请选择包含正文和时间码的文件。",
     subtitleError_overlap: "字幕时间重叠或顺序有误，请导出按时间排列、无重叠的单轨原文字幕。",
     subtitleError_range: "字幕时间超出素材范围，请确认字幕对应当前素材及其时长。",

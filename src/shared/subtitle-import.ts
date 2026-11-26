@@ -9,7 +9,7 @@ const MAX_WORDS = 100_000;
 const MAX_CUE_CHARS = 8_000;
 
 export const SUBTITLE_IMPORT_ERROR_CODES = [
-  "format", "size", "encoding", "cue", "empty", "overlap", "range", "limit", "mapped",
+  "format", "size", "encoding", "cue", "timestamps", "empty", "overlap", "range", "limit", "mapped",
 ] as const;
 export type SubtitleImportErrorCode = typeof SUBTITLE_IMPORT_ERROR_CODES[number];
 
@@ -35,6 +35,7 @@ export function describeSubtitleImportError(error: unknown): string {
     size: "The subtitle file exceeds 5 MB; export a smaller transcript.",
     encoding: "Save the subtitle file as UTF-8 and retry.",
     cue: "Check cue text, timestamp syntax and blank lines between cues.",
+    timestamps: "This is a timestamped transcript, not SRT or WebVTT; export the track as SRT or WebVTT and import that.",
     empty: "The file has no subtitle cues.",
     overlap: "Export a single chronological transcript track without overlapping cues.",
     range: "Subtitle times exceed the source duration; choose subtitles aligned to this media file.",
@@ -49,6 +50,29 @@ export function validateSubtitleInput(text: unknown, format: unknown): asserts t
   if (typeof text !== "string") fail("format");
   if (text.length > SUBTITLE_IMPORT_MAX_BYTES || new TextEncoder().encode(text).length > SUBTITLE_IMPORT_MAX_BYTES) fail("size");
   if (text.includes("\u0000") || text.includes("\uFFFD")) fail("encoding");
+}
+
+/**
+ * A timestamped transcript (`[00:41] Ay!` one line per fragment) is not a cue
+ * track: there is no `-->`, so there is no end time to import and every
+ * boundary would have to be invented. YouTube/GitHub transcript exports and
+ * plain-text dumps from subtitle tools are shaped like this.
+ *
+ * Recognised only to name the real problem. Without it the creator gets the
+ * generic malformed-cue message and hunts for a broken cue that does not
+ * exist; the file is not an SRT at all. Needs a few list lines before we
+ * claim that, so a stray timestamp in an otherwise broken SRT still reads as
+ * a cue problem.
+ */
+const SUBTITLE_LIST_LINE = /^[\t ]*\[?\d{1,2}:\d{2}(?::\d{2})?\]?[\t ]/;
+const SUBTITLE_LIST_MIN_LINES = 3;
+
+function looksLikeTimestampedTranscript(source: string): boolean {
+  let seen = 0;
+  for (const line of source.split("\n")) {
+    if (SUBTITLE_LIST_LINE.test(line) && ++seen >= SUBTITLE_LIST_MIN_LINES) return true;
+  }
+  return false;
 }
 
 function timestamp(value: string, format: SubtitleFormat): number | null {
@@ -345,8 +369,10 @@ export function subtitleRepairNotice(
  * boundaries are preserved; all within-cue word times are explicitly estimated.
  * Malformed tracks (unreadable encoding, stray timestamps, mapped WebVTT,
  * times outside the source) are still rejected instead of silently losing
- * dialogue; with `repair` on, overlapping/backwards/zero-length/out-of-order
- * cues inside an otherwise readable track are repaired and receipted instead.
+ * dialogue; a file that is a timestamped transcript list rather than a cue
+ * track is rejected as `timestamps` so the message names what is wrong; with
+ * `repair` on, overlapping/backwards/zero-length/out-of-order cues inside an
+ * otherwise readable track are repaired and receipted instead.
  */
 export function parseSubtitleTranscript(
   text: string,
@@ -367,6 +393,10 @@ export function parseSubtitleTranscript(
     if (blocks[0].includes("-->")) fail("cue", 1);
     blocks.shift();
   }
+
+  // Checked before the cue loop, so the first block is not blamed as a
+  // malformed cue when the whole file is a timestamped transcript list.
+  if (!source.includes("-->") && looksLikeTimestampedTranscript(source)) fail("timestamps");
 
   const parsed: ParsedCue[] = [];
   for (const block of blocks) {

@@ -1,9 +1,64 @@
 import { describe, expect, it } from "vitest";
-import { parseSubtitleTranscript, SUBTITLE_IMPORT_MAX_BYTES, subtitleImportError } from "../subtitle-import";
+import {
+  describeSubtitleImportError,
+  parseSubtitleTranscript,
+  SUBTITLE_IMPORT_MAX_BYTES,
+  subtitleImportError,
+} from "../subtitle-import";
 import { summarizeTimingQuality } from "../transcript-quality";
 import { editSegmentText, tokenizeForWords } from "../edit-transcript";
 
 const srt = (body = "Hello world", start = "00:00:01,250", end = "00:00:03,750") => `1\n${start} --> ${end}\n${body}\n`;
+
+/**
+ * 实测(2026-11-26,用户 Downloads 目录):两份导出文件都叫 `.srt`、扩展名与
+ * 「选一个 SRT/VTT」的提示都对,内容却是行首时间码的文稿:
+ *
+ *     [00:20] Ah
+ *     [01:39] >> Ay!
+ *     [01:00:02] Pinage kimdir?
+ *
+ * 整份文件一个 `-->` 都没有(1,984 行、0 个箭头、0 个空行)。旧行为是在第一块
+ * 上抛 `cue:1`,界面显示「字幕段落为空或格式有误……第 1 段」——用户去找一个
+ * 根本不存在的坏段落,而真正的问题是「这不是字幕轨」。现在这类文件单独报
+ * `timestamps`,并且**不带段号**(cue 0),因为没有任何一段是坏的。
+ */
+describe("timestamped transcript lists are named, not blamed on a cue", () => {
+  const list = [
+    "[00:20] Ah",
+    "[00:39] >>",
+    "[00:50] >> Ah.",
+    "[01:02] Ah.",
+    "[01:00:02] Pinage kimdir?",
+  ].join("\n");
+
+  it("rejects a real-world [MM:SS] transcript export with its own code and no cue number", () => {
+    expect(() => parseSubtitleTranscript(list, "srt", 600)).toThrow("subtitle-import:timestamps:0");
+    // 同一条路径在导入入口(repair 打开)上也是同一个错误:修复不是「整份文件不是字幕」的解药
+    expect(() => parseSubtitleTranscript(list, "srt", 600, { repair: true })).toThrow("subtitle-import:timestamps:0");
+    expect(subtitleImportError(new Error("subtitle-import:timestamps:0"))).toEqual({ code: "timestamps", cue: 0 });
+    // cue 0 时界面不追加「第 1 段」——没有哪一段是坏的
+    expect(describeSubtitleImportError(new Error("subtitle-import:timestamps:0"))).not.toContain("Cue");
+  });
+
+  it("detects it with or without blank lines between entries", () => {
+    const spaced = list.split("\n").join("\n\n");
+    expect(() => parseSubtitleTranscript(spaced, "srt", 600)).toThrow("timestamps");
+    // 方括号可省:有的导出直接写「00:20 metin」
+    expect(() => parseSubtitleTranscript(list.replace(/[\[\]]/g, ""), "srt", 600)).toThrow("timestamps");
+  });
+
+  it("still reports a malformed cue as a cue, and a header-less VTT as a format problem", () => {
+    // 箭头在、cue 行不是段号 → 仍然是坏的段落,不是文稿
+    expect(() => parseSubtitleTranscript("x\n00:00:01,000 --> 00:00:02,000\nhi", "srt", 8)).toThrow("cue:1");
+    // 只有一两行时间码的残文件不足以断言「这是文稿」,按原有口径报坏段落
+    expect(() => parseSubtitleTranscript("[00:20] Ah\n[00:39] >>", "srt", 600)).toThrow("cue:1");
+    // VTT 先查头:没有 WEBVTT 就是格式问题,不该被当成文稿
+    expect(() => parseSubtitleTranscript(list, "vtt", 600)).toThrow("format:0");
+    // 真正的 SRT 一个字都不受影响
+    expect(parseSubtitleTranscript(srt(), "srt", 8).segments).toHaveLength(1);
+  });
+});
 
 describe("subtitle transcript interchange", () => {
   it("preserves BOM/CRLF cue boundaries and marks every word as estimated", () => {

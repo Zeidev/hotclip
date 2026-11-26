@@ -233,6 +233,7 @@ export const en = {
     subtitleError_size: "This subtitle file exceeds 5 MB. Export a smaller transcript and try again.",
     subtitleError_encoding: "The text encoding is unreadable. Save the subtitle file as UTF-8 and try again.",
     subtitleError_cue: "A subtitle cue is empty or malformed. Check its timestamps and the blank lines between cues.",
+    subtitleError_timestamps: "This file is a timestamped transcript ([00:41] text per line), not SRT or WebVTT — it has no cue start and end times. Export the subtitles as SRT or WebVTT and import that.",
     subtitleError_empty: "No subtitle cues found. Choose a file containing text and timestamps.",
     subtitleError_overlap: "Cues overlap or are out of order. Export one chronological transcript track without overlapping cues.",
     subtitleError_range: "Subtitle times fall outside this media file. Check that the subtitles match the source and its duration.",

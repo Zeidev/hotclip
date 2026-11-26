@@ -233,6 +233,7 @@ export const tr = {
     subtitleError_size: "Bu altyazı dosyası 5 MB'ı aşıyor. Daha küçük bir döküm dışa aktarıp tekrar deneyin.",
     subtitleError_encoding: "Metin kodlaması okunamıyor. Altyazı dosyasını UTF-8 olarak kaydedip tekrar deneyin.",
     subtitleError_cue: "Bir altyazı ipucu boş veya bozuk. Zaman damgalarını ve ipuçları arasındaki boş satırları kontrol edin.",
+    subtitleError_timestamps: "Bu dosya SRT veya WebVTT değil, satır başı zaman damgalı bir döküm (her satır \"[00:41] metin\") — ipucu başlangıç/bitiş zamanı yok. Altyazıları SRT veya WebVTT olarak dışa aktarıp onu içe aktarın.",
     subtitleError_empty: "Altyazı ipucu bulunamadı. Metin ve zaman damgası içeren bir dosya seçin.",
     subtitleError_overlap: "İpuçları çakışıyor veya sırasız. Çakışmayan, tek kronolojik döküm izi dışa aktarın.",
     subtitleError_range: "Altyazı zamanları bu medya dosyasının dışında. Altyazıların kaynakla ve süresiyle eşleştiğini kontrol edin.",
