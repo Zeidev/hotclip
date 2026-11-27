@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { peaksFromPcm, peakInRange, mapPeakEvents, type PeakTrack } from "../audio-peaks";
+import {
+  EDGE_QUIET_PEAK,
+  EDGE_QUIET_RUN_SEC,
+  peakAt,
+  peakInRange,
+  peaksFromPcm,
+  mapPeakEvents,
+  quietRunAt,
+  relativeQuietPeak,
+  snapEdgeToQuiet,
+  snapSpansToQuiet,
+  type PeakTrack,
+} from "../audio-peaks";
 import { mapToOutputTime } from "../reframe";
 
 describe("peaksFromPcm", () => {
@@ -100,5 +112,89 @@ describe("mapPeakEvents", () => {
   it("近静音素材没有峰事件", () => {
     const quiet: PeakTrack = { values: Float32Array.from([0.01, 0.02, 0.01]), startSec: 100, hopSec: 0.5 };
     expect(mapPeakEvents(quiet, segments, 100, 8)).toEqual([]);
+  });
+});
+
+describe("切点真音频吸附(snapEdgeToQuiet / snapSpansToQuiet)", () => {
+  const hopSec = 1 / 30;
+  /** [from, to, peak] 铺出来的轨道;未覆盖的块 = 0.01(静音)。 */
+  function trackFrom(spans: Array<[number, number, number]>, startSec = 10, endSec = 14): PeakTrack {
+    const values = new Float32Array(Math.ceil((endSec - startSec) / hopSec)).fill(0.01);
+    for (const [from, to, peak] of spans) {
+      const first = Math.max(0, Math.floor((from - startSec) / hopSec));
+      for (let i = first; i < values.length && startSec + i * hopSec < to - 1e-9; i++) values[i] = peak;
+    }
+    return { values, startSec, hopSec };
+  }
+
+  it("peakAt 取该时刻所在块;轨道外 = 0(没证据)", () => {
+    const track: PeakTrack = { values: Float32Array.from([0.01, 0.5, 0.01]), startSec: 10, hopSec: 1 };
+    expect(peakAt(track, 11.5)).toBeCloseTo(0.5);
+    expect(peakAt(track, 9.5)).toBe(0);
+    expect(peakAt(track, 13)).toBe(0);
+  });
+
+  it("quietRunAt 要求整段被覆盖且低于阈值:没覆盖不算静音", () => {
+    const track = trackFrom([[10, 10.5, 0.5]], 10, 12);
+    expect(quietRunAt(track, 11, EDGE_QUIET_PEAK, EDGE_QUIET_RUN_SEC)).toBe(true);
+    expect(quietRunAt(track, 10.0, EDGE_QUIET_PEAK, EDGE_QUIET_RUN_SEC)).toBe(false);
+    // 轨道只到 12s:12 之前一点点起跑的窗口越界 → 不算静音(不能凭「没有数据」下结论)
+    expect(quietRunAt(track, 11.99, EDGE_QUIET_PEAK, EDGE_QUIET_RUN_SEC)).toBe(false);
+  });
+
+  it("已经在静音里的切点一个都不动", () => {
+    const track = trackFrom([[12, 14, 0.5]]);
+    expect(snapEdgeToQuiet(track, 11, { bias: "head" })).toEqual({ sec: 11, movedSec: 0 });
+  });
+
+  it("切点在真人声里 → 往前挪进静音(head)或往后(tail)", () => {
+    // 真人声 11.85-12.6,切点 12 正落在这段发声中间(估词时间与真语音错位);
+    // 静音只在前面 0.21s 处 → head 往前挪
+    const track = trackFrom([[11.85, 12.6, 0.5]]);
+    const head = snapEdgeToQuiet(track, 12, { bias: "head" });
+    expect(head.movedSec).toBeLessThan(0);
+    expect(quietRunAt(track, head.sec)).toBe(true);
+    expect(head.sec).toBeCloseTo(11.78, 1); // 只挪到最近的静音,不越过
+
+    // 镜像:真人声 11.4-12.15,静音只在后面 0.15s 处 → tail 往后挪
+    const tray = trackFrom([[11.4, 12.15, 0.5]]);
+    const tail = snapEdgeToQuiet(tray, 12, { bias: "tail" });
+    expect(tail.movedSec).toBeGreaterThan(0);
+    expect(quietRunAt(tray, tail.sec)).toBe(true);
+    expect(tail.sec).toBeCloseTo(12.17, 1);
+  });
+
+  it("oneWay 只许一个方向:反向没有静音就原样返回", () => {
+    // 响的 11.5-12.2:往回要挪 0.56s(超过 0.4s 上限),往后 0.2s 就有静音
+    const track = trackFrom([[11.5, 12.2, 0.5]]);
+    expect(snapEdgeToQuiet(track, 12, { bias: "head", oneWay: "earlier" })).toEqual({ sec: 12, movedSec: 0 });
+    const later = snapEdgeToQuiet(track, 12, { bias: "tail", oneWay: "later" });
+    expect(later.movedSec).toBeGreaterThan(0);
+  });
+
+  it("没静音可挪(附近全在响)→ 原样返回,不猜", () => {
+    const track = trackFrom([[10, 14, 0.5]]);
+    expect(snapEdgeToQuiet(track, 12, { bias: "head" })).toEqual({ sec: 12, movedSec: 0 });
+  });
+
+  it("relativeQuietPeak:越吵的段落门槛越高,但有上下限", () => {
+    const loud = trackFrom([[10, 14, 0.5]]);
+    expect(relativeQuietPeak(loud, 12)).toBeCloseTo(0.11, 3);
+    const quiet = trackFrom([]);
+    expect(relativeQuietPeak(quiet, 12)).toBe(EDGE_QUIET_PEAK);
+    const screaming = trackFrom([[10, 14, 1]]);
+    expect(relativeQuietPeak(screaming, 12)).toBeLessThanOrEqual(0.2); // ceiling
+  });
+
+  it("snapSpansToQuiet:强制剪除区间两端挪到附近谷底,空区间被丢掉", () => {
+    // 密集口语:11.6 处一段 0.08s 的谷底(0.02,门槛 0.05 之下),其余都在响。
+    // 语气词区间按估词时间标成 11.5-11.8,但真人声 11.3-12.0 都在响;
+    const track = trackFrom([[10, 11.6, 0.4], [11.6, 11.75, 0.02], [11.75, 12.5, 0.4]]);
+    const [span] = snapSpansToQuiet(track, [{ startSec: 11.5, endSec: 12.4 }], { ceiling: 0.05 });
+    expect(span.startSec).toBeCloseTo(11.6, 2);
+    expect(span.endSec).toBeCloseTo(12.5, 2);
+
+    const empty = snapSpansToQuiet(track, [{ startSec: 11.7, endSec: 11.7 }], { ceiling: 0.05 });
+    expect(empty).toEqual([]);
   });
 });

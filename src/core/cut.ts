@@ -414,7 +414,10 @@ export function buildJumpCutArgs(
   options: CutOptions = {}
 ): string[] {
   if (segments.length === 0) throw new Error("jump cut requires at least one segment");
-  const seek = Math.max(0, clipStartSec);
+  // 首段可能被「补进静音」拉到切片起点之前(见 gaps.snapOuterEdgesToQuiet):
+  // seek 取两者较小值,否则首个 trim 的 start 被夹到 0、补静音的那一段被悄悄
+  // 丢掉,成片比计划短一截,字幕/运镜/时长全部对不上。
+  const seek = Math.max(0, Math.min(clipStartSec, segments[0].startSec));
   const lastEnd = segments[segments.length - 1].endSec;
   const readDuration = lastEnd - seek + 0.5; // small margin past the tail
 

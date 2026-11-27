@@ -25,7 +25,7 @@ import { measurePieceColors, planPieceColorGrades } from "./color-match";
 import { detectFileOnsets, repeatBeatGrid } from "./beat";
 import { planColdOpen, planFlashForward, coldOpenQuoteText, FLASH_SKIP_NEAR_START_SEC } from "./coldopen";
 import { ZOOM_PUNCH_END } from "./autozoom";
-import { computeJumpCut, BREATH_PAD_SEC } from "./gaps";
+import { computeJumpCut, snapOuterEdgesToQuiet, BREATH_PAD_SEC } from "./gaps";
 import { perturbLayout } from "../shared/perturb";
 import { clampTranslationLines, remapTranslationLines, type TranslationLine } from "./translate";
 import { AIGC_BADGE_TEXT, uiLang } from "../shared/ui-lang";
@@ -50,7 +50,14 @@ import {
   withinOnePiece,
   type ClipPiece,
 } from "../shared/pieces";
-import { extractPeaks, findPeakEvents, mapPeakEvents } from "./audio-peaks";
+import {
+  extractPeaks,
+  findPeakEvents,
+  mapPeakEvents,
+  relativeQuietPeak,
+  snapEdgeToQuiet,
+  snapSpansToQuiet,
+} from "./audio-peaks";
 import { genrePauseGapSec } from "./genre";
 import {
   planSfxCues,
@@ -168,6 +175,12 @@ const OPENING_HOOK_SEC = 2.2;
  * 和智能封面各自按既有 fail-open 路径退化(与"提取失败"完全同一条分支)。
  */
 export const PEAK_SPAN_MAX_SEC = 300;
+
+/**
+ * 峰值轨前后多抽这么多秒。首尾补静音要往切片外侧探(末尾词后面那段静音
+ * 常常正好在切片边界之外),轨道停在切片边界上就永远探不到。
+ */
+export const PEAK_MARGIN_SEC = 0.6;
 
 function peakSpanTooLong(clip: { startSec: number; endSec: number }): boolean {
   return clip.endSec - clip.startSec > PEAK_SPAN_MAX_SEC;
@@ -838,30 +851,50 @@ export async function exportClips(
       let plan = null;
       let fillerHits: FillerHit[] = [];
       let retakeHits: RetakeHit[] = [];
-      // 峰值轨提升作用域:跳剪的静音门用,封面选帧也用(见下)
+      // 峰值轨先备好(真音频):跳剪的静音门、首尾补静音、强制剪除区间、冷开
+      // 窗吸附都吃它。前后各多抽 PEAK_MARGIN_SEC——末尾补静音常常要往切片外侧
+      // 探那 0.3 秒静音,轨道停在切片边界上就探不到,末尾词照样切在半个音节上。
       let clipPeaks: Awaited<ReturnType<typeof extractPeaks>> | undefined;
+      const wantsAudioTruth = Boolean(
+        options.autoZoom || options.sfx || options.flashForward || clip.flashForward || options.coldOpen ||
+        ((options.jumpCut || options.cleanFillers || options.cutRetakes || stitched) && clip.words && clip.words.length > 0)
+      );
+      if (wantsAudioTruth && srcInfo?.hasAudio !== false && !peakSpanTooLong(clip)) {
+        clipPeaks = await extractPeaks(
+          inputPath,
+          Math.max(0, clip.startSec - PEAK_MARGIN_SEC),
+          clip.endSec + PEAK_MARGIN_SEC,
+          srcInfo?.audioStreamIndex
+        ).catch(() => undefined);
+      }
       if ((options.jumpCut || options.cleanFillers || options.cutRetakes || stitched) && clip.words && clip.words.length > 0) {
         fillerHits = options.cleanFillers ? findFillerWords(clip.words) : [];
         // 重录废稿:在去掉语气词之后判(口误"呃"不该影响两遍话的相似度)
         const deFilled = dropFillerWords(clip.words, fillerHits);
         retakeHits = options.cutRetakes ? findRetakes(deFilled) : [];
         const planWords = dropRetakeWords(deFilled, retakeHits);
-        const peaks = options.jumpCut && !peakSpanTooLong(clip)
-          ? await extractPeaks(inputPath, clip.startSec, clip.endSec, srcInfo?.audioStreamIndex).catch(() => undefined)
-          : undefined;
-        clipPeaks = peaks;
+        // 跳剪/语气词/重录都吃同一份真音频轨(只抽一次)
+        const peaks = clipPeaks;
         // filler/retake-only mode with nothing found → leave the clip untouched
         if (options.jumpCut || stitched || fillerHits.length > 0 || retakeHits.length > 0) {
           // 情绪守卫:峰值事件(笑声/怒吼/掌声)前后 1s 的停顿是节目效果,禁剪——
-          // 抖包袱前的憋是喜剧节奏,机器不该「优化」掉它
+          // 抖包袱前的憋是喜剧节奏,机器不该「优化」掉它。轨前后多抽了 0.6s,
+          // 边界外的事件不算本条片的情绪峰(否则末尾一个 gap 会被无端放过)。
           const protectedSpans = peaks
-            ? findPeakEvents(peaks).map((e) => ({ startSec: e.startSec - 1.0, endSec: e.endSec + 1.0 }))
+            ? findPeakEvents(peaks)
+                .filter((e) => e.startSec >= clip.startSec - 1e-6 && e.startSec <= clip.endSec + 1e-6)
+                .map((e) => ({ startSec: e.startSec - 1.0, endSec: e.endSec + 1.0 }))
             : [];
+          // 语气词/重录/拼接缝的边界取自语时间戳;估的时间戳会连带剪掉邻居词的
+          // 半个音节。切点挪到真音频最近的静音/谷底(手动选段不动——用户亲手
+          // 定过的边界)。
+          const rawForceSpans = [...stitchSpans, ...fillerCutSpans(fillerHits), ...retakeCutSpans(retakeHits)].sort(
+            (a, b) => a.startSec - b.startSec
+          );
+          const forceCutSpans = peaks && !clip.manualBounds ? snapSpansToQuiet(peaks, rawForceSpans) : rawForceSpans;
           plan = computeJumpCut(planWords, clip.startSec, clip.endSec, {
             peaks,
-            forceCutSpans: [...stitchSpans, ...fillerCutSpans(fillerHits), ...retakeCutSpans(retakeHits)].sort(
-              (a, b) => a.startSec - b.startSec
-            ),
+            forceCutSpans,
             // 静音阈值按品类分档:解说 0.4s、口播 0.6s、对谈 0.9s(genre.ts)
             gapThresholdSec: options.jumpCut ? genrePauseGapSec(options.genreId) : Infinity,
             protectedSpans,
@@ -886,6 +919,16 @@ export async function exportClips(
       // 拼接片但没有词表(不烧字幕也不跳剪):段清单本身就是成片计划
       if (!plan && stitched) {
         plan = planFromPieces(pieces);
+      }
+      // 没有跳剪计划时,切片首尾本身就是切点。词边界守卫(VAD/镜头吸附)在
+      // SRT 导入的估词时间上会失效,首尾就切在半个词上——按真音频往两侧补进
+      // 静音(首端只往前、尾端只往后:只会多留声音)。手动选段不动。
+      if (!plan && clipPeaks && !clip.manualBounds) {
+        const [edge] = snapOuterEdgesToQuiet([{ startSec: clip.startSec, endSec: clip.endSec }], clipPeaks);
+        if (edge.startSec !== clip.startSec || edge.endSec !== clip.endSec) {
+          clip = { ...clip, startSec: edge.startSec, endSec: edge.endSec };
+          snappedRange.set(clip.id, { startSec: edge.startSec, endSec: edge.endSec });
+        }
       }
       const baseSegments = plan?.segments ?? [{ startSec: clip.startSec, endSec: clip.endSec }];
       // Tier-0 luma thresholds currently describe the encoded signal domain;
@@ -1013,9 +1056,8 @@ export async function exportClips(
       // 峰值事件(输出时间轴):运镜强调与音效打点共用一份——响度峰≈情绪
       // 高点,与智能封面同一声学代理;跳剪时映射到压缩时间轴。提取失败/
       // 拼接跨度超限按「无事件」fail-open。
-      if ((options.autoZoom || options.sfx || options.flashForward || clip.flashForward) && !clipPeaks && !peakSpanTooLong(clip)) {
-        clipPeaks = await extractPeaks(inputPath, clip.startSec, clip.endSec, srcInfo?.audioStreamIndex).catch(() => undefined);
-      }
+      // 峰值轨在上面已按 wantsAudioTruth 统一抽好(带 PEAK_MARGIN_SEC),这里
+      // 不再补抽——补抽的那份没有边距,末尾静音探不到,两处口径还会不一致。
       // (源时间, 输出时间) 成对保留:运镜强调/音效打点吃输出时间,
       // 爆点闪现要回源片切那一刀、吃源时间
       const peakEventPairs = clipPeaks ? mapPeakEvents(clipPeaks, plan?.segments ?? null, clip.startSec, clipDuration, options.transitionSec ?? 0) : [];
@@ -1291,6 +1333,27 @@ export async function exportClips(
             coldOpenPlan = null;
           }
         }
+        // 迷你片两端是真实切点:词时间戳若是估的(SRT 导入按字符均分),窗口
+        // 边界会落在真语音中间(实测窗口头 437.911 落在一句真人声里 280ms,
+        // 开场第一声就是残词)。用真音频把两端挪到最近的静音/谷底,首端只往前、
+        // 尾端只往后——迷你片只会多带一点上下文,不会多切一个词。
+        if (coldOpenPlan && clipPeaks) {
+          const coHead = snapEdgeToQuiet(clipPeaks, coldOpenPlan.startSec, {
+            bias: "head",
+            oneWay: "earlier",
+            quietPeak: relativeQuietPeak(clipPeaks, coldOpenPlan.startSec),
+          });
+          const coTail = snapEdgeToQuiet(clipPeaks, coldOpenPlan.endSec, {
+            bias: "tail",
+            oneWay: "later",
+            quietPeak: relativeQuietPeak(clipPeaks, coldOpenPlan.endSec),
+          });
+          const snapped = { startSec: Math.max(0, coHead.sec), endSec: coTail.sec };
+          // 拼接片:扩出去的两端不能越进被剪掉的空隙(见上 withinOnePiece)
+          if (snapped.endSec > snapped.startSec && (!stitched || withinOnePiece(pieces, snapped.startSec, snapped.endSec))) {
+            coldOpenPlan = snapped;
+          }
+        }
         const coPlan = coldOpenPlan;
         if (coPlan) {
           const miniPath = outPath.replace(/\.mp4$/, ".hook.mp4");
@@ -1495,6 +1558,10 @@ export async function exportClips(
           loudnessNormalized: Boolean(options.normalizeLoudness),
           words: clip.words,
           segments: plan ? plan.segments : [{ startSec: clip.startSec, endSec: clip.endSec }],
+          // 真音频证据 + 冷开迷你片两端:切点核对按「那一下有没有切进发声」判,
+          // 不再信估出来的词边界
+          peaks: clipPeaks,
+          cutSpans: coldOpenPlan ? [coldOpenPlan] : undefined,
           contentHits,
           pacingGapSec,
           hookPayoffMissing,

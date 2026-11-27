@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { computeJumpCut, mergeShortCuts } from "../gaps";
 import { buildJumpCutArgs } from "../cut";
-import type { PeakTrack } from "../audio-peaks";
+import { quietRunAt, type PeakTrack } from "../audio-peaks";
 import type { TranscriptWord } from "../../shared/api-types";
 
 function w(text: string, startSec: number, endSec: number): TranscriptWord {
@@ -168,6 +168,12 @@ describe("buildJumpCutArgs", () => {
     expect(args).toContain("[aout]");
   });
 
+  it("首段被补静音拉到切片起点之前时,seek 跟着前移(否则补的那段被夹掉)", () => {
+    const args = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 10, [{ startSec: 9.7, endSec: 12.2 }]);
+    expect(args[args.indexOf("-ss") + 1]).toBe("00:00:09.700");
+    const fc = args[args.indexOf("-filter_complex") + 1];
+    expect(fc).toContain("[0:v:0]trim=start=0.000:end=2.500");
+  });
   it("chains reframe + subtitles after the concat", () => {
     const args = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 10, segments, {
       vertical: true,
@@ -175,5 +181,54 @@ describe("buildJumpCutArgs", () => {
     });
     const fc = args[args.indexOf("-filter_complex") + 1];
     expect(fc).toMatch(/\[vc\]crop=.*scale=1080:1920.*subtitles=filename='\/tmp\/a\.ass'\[vout\]/);
+  });
+});
+
+describe("首尾补进真静音(成片开头/结尾的词不能被切半)", () => {
+  const hopSec = 1 / 30;
+  /** [from, to, peak] 铺出来的峰值轨;未覆盖的块 = 0.01(静音)。 */
+  function track(spans: Array<[number, number, number]>, startSec = 9.5, endSec = 13.6): PeakTrack {
+    const values = new Float32Array(Math.ceil((endSec - startSec) / hopSec)).fill(0.01);
+    for (const [from, to, peak] of spans) {
+      const first = Math.max(0, Math.floor((from - startSec) / hopSec));
+      for (let i = first; i < values.length && startSec + i * hopSec < to - 1e-9; i++) values[i] = peak;
+    }
+    return { values, startSec, hopSec };
+  }
+
+  it("尾部被 clipEndSec 夹掉、落在真人声里 → 往后补进静音", () => {
+    const words = [w("a", 10.2, 10.6), w("b", 10.7, 11.2), w("c", 11.3, 12.95)];
+    // 真人声一直到 13.25:切片在 13 结束,末尾词正被切在发声里;静音 13.25 之后
+    const peaks = track([[10.2, 13.25, 0.4]]);
+    const plan = computeJumpCut(words, 10, 13, { peaks });
+    expect(plan.segments).toHaveLength(1);
+    const tail = plan.segments[0].endSec;
+    expect(tail).toBeGreaterThan(13.05);
+    expect(quietRunAt(peaks, tail)).toBe(true);
+    // 补静音让成片比原切片略长:净删除量取 0,不能出现负回执
+    expect(plan.removedSec).toBe(0);
+    expect(plan.durationSec).toBeCloseTo(tail - plan.segments[0].startSec, 6);
+  });
+
+  it("首端落在真人声里(估词时间偏后)→ 往前补进静音,词一个不丢", () => {
+    const words = [w("a", 10.2, 10.6), w("b", 10.7, 11.5)];
+    // 真语音从 9.86 就开始,切片起点 10 落在句中;静音在 9.86 之前
+    const peaks = track([[9.86, 11.6, 0.4]]);
+    const plan = computeJumpCut(words, 10, 12, { peaks });
+    expect(plan.segments).toHaveLength(1);
+    const head = plan.segments[0].startSec;
+    expect(head).toBeLessThan(10);
+    expect(quietRunAt(peaks, head)).toBe(true);
+    expect(plan.words).toHaveLength(2);
+    // 字幕时间基跟着新的起点:首词在成片里 = 源时间 − 新起点
+    expect(plan.words[0].startSec).toBeCloseTo(10.2 - head, 3);
+  });
+
+  it("两端本来就在静音里 → 一个字节都不动", () => {
+    const words = [w("a", 10.2, 10.6), w("b", 10.7, 11.5)];
+    const peaks = track([[10.2, 11.6, 0.4]]);
+    const plan = computeJumpCut(words, 10, 12, { peaks });
+    expect(plan.segments[0].startSec).toBeCloseTo(10.05, 3); // 10.2 − 0.15 前导
+    expect(plan.segments[0].endSec).toBeCloseTo(11.8, 3); // 11.5 + 0.3 尾巴
   });
 });

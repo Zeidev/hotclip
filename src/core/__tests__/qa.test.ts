@@ -9,6 +9,7 @@ import {
   assessClipQa,
   type QaAssessment,
 } from "../qa";
+import type { PeakTrack } from "../audio-peaks";
 
 // ffmpeg stderr 片段仿真(与真实输出同格式)
 const BLACK_LINES = [
@@ -160,6 +161,38 @@ describe("countMidWordCuts (切点半词复核)", () => {
   it("无词或无段返回 0", () => {
     expect(countMidWordCuts([], [{ startSec: 0, endSec: 1 }])).toBe(0);
     expect(countMidWordCuts(words, [])).toBe(0);
+  });
+
+  // 估出来的词时间(SRT 导入按字符均分)会把「切进真语音」伪装成「落在词边界」。
+  // 有峰值轨时按真发声判:两侧都在响 = 那一下切进了发声中间。
+  describe("有真音频证据时按发声判,不信估出来的词边界", () => {
+    const hopSec = 1 / 30;
+    function track(spans: Array<[number, number, number]>): PeakTrack {
+      const values = new Float32Array(90).fill(0.01);
+      for (const [from, to, peak] of spans) {
+        for (let i = Math.max(0, Math.floor((from - 10) / hopSec)); i < values.length && 10 + i * hopSec < to; i++) {
+          values[i] = peak;
+        }
+      }
+      return { values, startSec: 10, hopSec };
+    }
+
+    it("词表说 10.6 是词边界,但真语音还在响 → 计为切词", () => {
+      // 10.58 起是真人声(0.4):段的起止两点(10.6 / 12)都切在发声中间
+      const peaks = track([[10, 10.58, 0.01], [10.58, 13, 0.4]]);
+      expect(countMidWordCuts(words, [{ startSec: 10.6, endSec: 12 }], undefined, peaks)).toBe(2);
+    });
+
+    it("真语音在切点两侧都静音 → 不算切词(词表即使说压在词里)", () => {
+      // 10.9 落在「直播」(10.6-11.2)内部,但真音频这里是静音:旧判据会误报
+      const peaks = track([[10, 13, 0.01]]);
+      expect(countMidWordCuts(words, [{ startSec: 10.9, endSec: 12 }], undefined, peaks)).toBe(0);
+    });
+
+    it("没有峰值轨时保持旧判据(词边界/容差)", () => {
+      expect(countMidWordCuts(words, [{ startSec: 10.9, endSec: 12 }])).toBe(1);
+      expect(countMidWordCuts(words, [{ startSec: 10.6, endSec: 12 }])).toBe(0);
+    });
   });
 });
 

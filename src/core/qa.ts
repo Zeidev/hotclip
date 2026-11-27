@@ -13,6 +13,7 @@ import { resolveFfmpegPath } from "./binaries";
 import { probeMedia } from "./probe";
 import { EDGE_FADE_SEC } from "./cut";
 import { formatLintIssue, type LintHit } from "./content-lint";
+import { peakAt, EDGE_QUIET_PEAK, type PeakTrack } from "./audio-peaks";
 import type { TranscriptWord } from "../shared/api-types";
 import type { AppLang } from "../shared/ui-lang";
 
@@ -79,6 +80,8 @@ const TRUE_PEAK_CEILING_DB = -1;
 const DURATION_TOLERANCE_SEC = 0.75;
 /** 切点离词边界的容差:淡化时长再放宽一点,压线不算切进词里。 */
 const BOUNDARY_TOLERANCE_SEC = EDGE_FADE_SEC + 0.02;
+/** 峰值轨判「发声跨过切点」时两侧各探多远(小于一块,不会跨到邻块)。 */
+const CUT_PROBE_SEC = 0.02;
 /**
  * 画面节奏告警线(秒):2026 调研口径「有意义的视觉变化间隔 ≤3s,硬顶 5s」
  * (RESEARCH-2026-08-CLIP-QUALITY.md 第三节)。这里取硬顶——只在明显偏慢时
@@ -223,19 +226,31 @@ export function parseLoudnessSummary(stderr: string): ClipQaReport["loudness"] {
 }
 
 /**
- * 切点核对(纯函数):每个保留段的起止点(源时间轴)是否压在某个词的
- * 中间——跳剪与镜头吸附都带词边界守卫,这里是「信任但要验证」的复核。
+ * 切点核对(纯函数):每个保留段的起止点(源时间轴)是否切进了发声中间——
+ * 跳剪与镜头吸附都带词边界守卫,这里是「信任但要验证」的复核。
  * words 与 segments 都用源片绝对时间。
+ *
+ * 有峰值轨时**按真音频判**:词时间戳可能是估的(SRT 导入按字符均分),「恰好
+ * 落在词边界」完全可能落在真语音里,旧判据因此报 0 而观众听到半截词。真音频
+ * 在切点两侧都还在响 = 那一下切进了发声中间;没有峰值证据才退回词边界判据。
  */
 export function countMidWordCuts(
   words: TranscriptWord[],
   segments: QaSpan[],
-  toleranceSec = BOUNDARY_TOLERANCE_SEC
+  toleranceSec = BOUNDARY_TOLERANCE_SEC,
+  peaks?: PeakTrack
 ): number {
   if (words.length === 0 || segments.length === 0) return 0;
   const cuts = segments.flatMap((s) => [s.startSec, s.endSec]);
   let hits = 0;
   for (const t of cuts) {
+    if (peaks) {
+      // 两侧各探 20ms(小于一块):发声跨过切点才算切词;落在静音/谷底不算
+      const sounding =
+        peakAt(peaks, t - CUT_PROBE_SEC) > EDGE_QUIET_PEAK && peakAt(peaks, t + CUT_PROBE_SEC) > EDGE_QUIET_PEAK;
+      if (sounding) hits += 1;
+      continue;
+    }
     const inside = words.some((w) => w.startSec + toleranceSec < t && t < w.endSec - toleranceSec);
     if (inside) hits += 1;
   }
@@ -432,6 +447,10 @@ export interface RunClipQaOptions {
   words?: TranscriptWord[];
   /** 实际保留的源片段(跳剪后多段);与 words 同为源片绝对时间。 */
   segments?: QaSpan[];
+  /** 额外的真实切点(冷开迷你片两端等);只取其起止点参与切点核对。 */
+  cutSpans?: QaSpan[];
+  /** 切片的真音频峰值轨(绝对源时间):有它时切点核对按真发声判,不信词时间。 */
+  peaks?: PeakTrack;
   /** 平台违禁词命中(content-lint 扫标题/钩子/文案/字幕的结果)。 */
   contentHits?: LintHit[] | null;
   /** 最长无视觉变化间隔(调用方按剪辑计划算好);缺省 = 不评估节奏。 */
@@ -456,7 +475,14 @@ export async function runClipQa(path: string, opts: RunClipQaOptions): Promise<C
     frozenSpans: parseFreezeSpans(stderr, info.durationSec),
     loudness: parseLoudnessSummary(stderr),
     loudnessNormalized: opts.loudnessNormalized,
-    midWordCuts: opts.words && opts.segments ? countMidWordCuts(opts.words, opts.segments) : null,
+    midWordCuts: opts.words && (opts.segments || opts.cutSpans)
+      ? countMidWordCuts(
+          opts.words,
+          [...(opts.segments ?? []), ...(opts.cutSpans ?? [])],
+          undefined,
+          opts.peaks
+        )
+      : null,
     contentHits: opts.contentHits,
     pacingGapSec: opts.pacingGapSec,
     hookPayoffMissing: opts.hookPayoffMissing,

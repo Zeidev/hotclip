@@ -9,7 +9,7 @@
  */
 import type { TranscriptWord } from "../shared/api-types";
 import { planBeatSnap } from "./beat";
-import { peakInRange, type PeakTrack } from "./audio-peaks";
+import { peakInRange, snapEdgeToQuiet, type PeakTrack } from "./audio-peaks";
 import { hasSpeechInRange, speechAnchorBounds, type SpeechActivitySpan } from "./speech-activity";
 
 export interface KeptSegment {
@@ -126,6 +126,23 @@ const SILENCE_PEAK_THRESHOLD = 0.04;
 /** Splices removing less than this are churn, not rhythm — fill them back. */
 const MIN_CUT_SEC = 0.2;
 
+/**
+ * 成片首尾也是真实切点:整条片的开头/结尾截在半个音节上,观众第一耳朵就听
+ * 出来。词时间戳可能是估的(SRT 导入按字符均分),峰值轨是真音频——首端只往
+ * **前**挪、尾端只往**后**挪,挪进验证过的静音,所以只会多保留声音,不会多剪
+ * 一个词;挪不动(附近没有静音)就原样不动。
+ */
+export function snapOuterEdgesToQuiet(segments: KeptSegment[], track: PeakTrack): KeptSegment[] {
+  if (segments.length === 0) return segments;
+  const out = segments.map((s) => ({ ...s }));
+  const head = snapEdgeToQuiet(track, out[0].startSec, { bias: "head", oneWay: "earlier" });
+  if (head.movedSec !== 0) out[0].startSec = head.sec;
+  const last = out.length - 1;
+  const tail = snapEdgeToQuiet(track, out[last].endSec, { bias: "tail", oneWay: "later" });
+  if (tail.movedSec !== 0) out[last].endSec = tail.sec;
+  return out;
+}
+
 /** Merge kept segments whose separating cut is too short to be worth a splice. */
 export function mergeShortCuts(segments: KeptSegment[], minCutSec = MIN_CUT_SEC): KeptSegment[] {
   if (segments.length < 2) return segments;
@@ -153,9 +170,12 @@ export function computeJumpCut(
   const transitionSec = Math.max(0, options.transitionSec ?? 0);
   const inClip = words.filter((w) => w.endSec > clipStartSec && w.startSec < clipEndSec);
   if (inClip.length === 0) {
-    const full = { startSec: clipStartSec, endSec: clipEndSec };
+    let full: KeptSegment = { startSec: clipStartSec, endSec: clipEndSec };
+    if (peaks) full = snapOuterEdgesToQuiet([full], peaks)[0];
+    const durationSec = full.endSec - full.startSec;
     return {
-      segments: [full], words: [], breaks: [], removedSec: 0, durationSec: clipEndSec - clipStartSec,
+      segments: [full], words: [], breaks: [], durationSec,
+      removedSec: Math.max(0, clipEndSec - clipStartSec - durationSec),
       ...(speechSpans !== undefined ? { speechProtectedGaps: 0 } : {}),
     };
   }
@@ -192,6 +212,9 @@ export function computeJumpCut(
   // "filled back" by the short-cut smoothing pass
   segments = mergeShortCuts(segments);
   segments = subtractSpans(segments, forceCutSpans);
+  // 首尾补进真静音:尾部 TAIL_SEC 常被 clipEndSec 夹掉,末尾词就被切在半个
+  // 音节上(实测尾部 452.78 切在真人声里,静音要到 452.87 才开始)
+  if (peaks && segments.length > 0) segments = snapOuterEdgesToQuiet(segments, peaks);
   // Beat snap runs before the word remap below, so captions, breaks, duration
   // and the removed-time receipt all follow the snapped timeline. 判据在成片
   // 时间轴上:beat 来自 BGM 文件,而段是源片时间(见 beat.ts 头部)。
@@ -206,7 +229,8 @@ export function computeJumpCut(
     0,
     segments.reduce((acc, s) => acc + (s.endSec - s.startSec), 0) - transitionSec * Math.max(0, segments.length - 1)
   );
-  const removedSec = clipEndSec - clipStartSec - durationSec;
+  // 首尾补静音会让成片比原切片略长 → 净删除量取 0 兜底(回执不能出现负数)
+  const removedSec = Math.max(0, clipEndSec - clipStartSec - durationSec);
 
   // Remap words onto the compressed output timeline.
   const remapped: TranscriptWord[] = [];
