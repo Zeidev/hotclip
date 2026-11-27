@@ -35,9 +35,18 @@ describe("stage-1 başlık gücü: gerçek veriden", () => {
   });
 
   it("tek başına çapasızlık onarım istemez(片inin gerçekten sayısı olmayabilir)", () => {
-    const c = codes("Parayla bitmiyor, altyapı lazım");
+    const c = codes("Kumara başladım");
     expect(c).toEqual(["no-anchor"]);
     expect(needsTitleRepair(c)).toBe(false);
+  });
+
+  it("反转/对照转折本身就是锚点:'bitmiyor' başlığı artık çapasız sayılmaz", () => {
+    // 27/40 gerçek başlık yalnız no-anchor'la işaretlenmişti; çoğu bu yapıdaydı
+    expect(codes("Parayla bitmiyor, altyapı lazım")).toEqual([]);
+    // İngilizce karşıtlık ve negasyon da aynı işi yapar
+    expect(
+      checkHookQuality([{ id: 1, title: "Money wasn't the problem" }], { lang: "en", surface: "stage1" })[0]?.codes ?? []
+    ).toEqual([]);
   });
 
   it("iyi başlıklar geçer: sayı, sayı sözcüğü, geçmiş zaman", () => {
@@ -227,11 +236,35 @@ describe("applyReviews: onarımı kabul etme kuralları", () => {
 
   it("çapa kazandıran başlık düzeltmesi kabul edilir", () => {
     const out = applyReviews(
-      [{ ...base, title: "Odada havalandırma var mı", score: 90 }],
+      [{ ...base, text: `${base.text} Mahkeme 50 bin lira ceza istedi.`, title: "Odada havalandırma var mı", score: 90 }],
       [{ id: 1, keep: true, gate: "publish", score: 90, note: "", titleFix: "50 bin liralık vantilatör odada ne yapıyor" }],
       "tr"
     );
     expect(out[0].title).toBe("50 bin liralık vantilatör odada ne yapıyor");
+  });
+
+  it("片段te bulunmayan sayı/引文 taşıyan başlık düzeltmesi reddedilir(出处检查)", () => {
+    // 模型最爱的「补一个不存在的锚点」:片段里没有 50 bin,却写成最像爆款的标题。
+    const invented = applyReviews(
+      [{ ...base, title: "Odada havalandırma var mı", score: 90 }],
+      [{ id: 1, keep: true, gate: "publish", score: 90, note: "", titleFix: "50 bin liralık vantilatör odada ne yapıyor" }],
+      "tr"
+    );
+    expect(invented[0].title).toBe("Odada havalandırma var mı");
+    // 数字容千分位/小数点差异:片段里是 7.5,标题写 7,5 仍算有出处。
+    const separators = applyReviews(
+      [{ ...base, text: `${base.text} 7.5 sene sonra`, title: "Odada havalandırma var mı", score: 90 }],
+      [{ id: 1, keep: true, gate: "publish", score: 90, note: "", titleFix: "7,5 sene sonra mahkemeye çıktım" }],
+      "tr"
+    );
+    expect(separators[0].title).toBe("7,5 sene sonra mahkemeye çıktım");
+    // 引文同样要在片段里逐字存在。
+    const quoted = applyReviews(
+      [{ ...base, title: "Odada havalandırma var mı", score: 90 }],
+      [{ id: 1, keep: true, gate: "publish", score: 90, note: "", titleFix: "「Kasanın anahtarı bende」 dedi" }],
+      "tr"
+    );
+    expect(quoted[0].title).toBe("Odada havalandırma var mı");
   });
 
   it("弱lendirmeyen başlık düzeltmesi reddedilir", () => {
@@ -245,7 +278,14 @@ describe("applyReviews: onarımı kabul etme kuralları", () => {
 
   it("eski davranış korunur: kalıp sözle başlayan başlık düzeltilir", () => {
     const out = applyReviews(
-      [{ ...base, title: "Merhaba arkadaşlar bugün sizlere kumardan", score: 90 }],
+      [
+        {
+          ...base,
+          text: `${base.text} 7,5 sene önce kumarhanede kağıdımı attırdım.`,
+          title: "Merhaba arkadaşlar bugün sizlere kumardan",
+          score: 90,
+        },
+      ],
       [{ id: 1, keep: true, gate: "publish", score: 90, note: "", titleFix: "7,5 sene önce kumarhanede kağıdımı attırdım" }],
       "tr"
     );

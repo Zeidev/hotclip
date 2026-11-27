@@ -669,6 +669,9 @@ export async function exportClips(
 
     signal?.throwIfAborted();
     const results: ExportedClip[] = [];
+    // 单条失败只丢这一条:其他成片照出、clips.json 照写,失败原因记进台账。
+    // 以前一条抛错整批中止,已经切好的成片连元数据都没留下。
+    const failures: Array<{ id: number; title: string; error: string }> = [];
     // "you decide what got cut": removed filler texts surface in clips.json
     const removedFillersByClip = new Map<number, string[]>();
     // Per-clip processing outcomes for clips.json — what the pipeline actually
@@ -684,6 +687,8 @@ export async function exportClips(
       let clip = clips[i];
       if (signal?.aborted) throw new Error("export cancelled");
       onProgress?.({ current: i + 1, total: totalUnits, clipId: clip.id, stage: "cutting" });
+      // 逐条隔离:一条坏片(素材损坏、某级滤镜失败、盘满)不拖垮整批。
+      try {
 
       // 模板受控微扰(v0.14):按「源文件+切片 id」种子小幅抖动字幕几何,
       // 批量出的成片不共享像素级相同的版式指纹;同种子可复现。
@@ -966,9 +971,10 @@ export async function exportClips(
           let coverageSamples = cp.coverageSamples;
           if (plan) {
             // jump cut: preserve retained motion without interpolating through removed gaps
-            kfs = remapCropKeyframes(kfs, plan.segments, clip.startSec);
+            const xfadeSec = options.transitionSec ?? 0;
+            kfs = remapCropKeyframes(kfs, plan.segments, clip.startSec, xfadeSec);
             coverageSamples = coverageSamples.filter(
-              (sample) => mapToOutputTime(sample.t, plan.segments, clip.startSec) !== null
+              (sample) => mapToOutputTime(sample.t, plan.segments, clip.startSec, xfadeSec) !== null
             );
           }
           if (kfs.length > 0) {
@@ -1012,7 +1018,7 @@ export async function exportClips(
       }
       // (源时间, 输出时间) 成对保留:运镜强调/音效打点吃输出时间,
       // 爆点闪现要回源片切那一刀、吃源时间
-      const peakEventPairs = clipPeaks ? mapPeakEvents(clipPeaks, plan?.segments ?? null, clip.startSec, clipDuration) : [];
+      const peakEventPairs = clipPeaks ? mapPeakEvents(clipPeaks, plan?.segments ?? null, clip.startSec, clipDuration, options.transitionSec ?? 0) : [];
       const peakEventsOut = peakEventPairs.map((p) => p.outSec);
       // 画面尺寸先算:运镜的输出几何与 punch-in 的拼接口径都要它。
       // uiCrop 会削掉画面高度,运镜的输出高度必须跟着削——运镜后的分片
@@ -1312,10 +1318,12 @@ export async function exportClips(
               });
               await writeFile(miniAssPath, miniAss, "utf8");
             }
-            // 人脸跟随:迷你片自己算一版裁窗(keyframes 已相对段起点),失败回退中心裁
+            // 人脸跟随:迷你片自己算一版裁窗(keyframes 已相对段起点),失败回退中心裁。
+            // 与正片同一份 sourceAnalysis:视频流序号/色彩计划必须一致,否则同一
+            // 条片子两段裁窗可能建立在不同口径的探针结果上。
             let miniTrack;
             if (trackPlan && options.modelsRoot) {
-              const cp = await generateCropPlan(inputPath, coPlan.startSec, coPlan.endSec, options.modelsRoot, uiCrop).catch(() => null);
+              const cp = await generateCropPlan(inputPath, coPlan.startSec, coPlan.endSec, options.modelsRoot, uiCrop, sourceAnalysis).catch(() => null);
               if (cp && cp.keyframes.length > 0) {
                 miniTrack = { cropXExpr: renderCropXExpr(cp.keyframes), cropW: cp.cropW, cropH: cp.cropH, cropY: cp.cropY };
               }
@@ -1414,7 +1422,7 @@ export async function exportClips(
           stitched && plan
             ? pieces
                 .slice(1)
-                .map((p) => mapToOutputTime(p.startSec, plan.segments, clip.startSec))
+                .map((p) => mapToOutputTime(p.startSec, plan.segments, clip.startSec, options.transitionSec ?? 0))
                 .filter((t): t is number => t !== null && t > 0.05)
             : [];
         const cues = planSfxCues({
@@ -1588,7 +1596,7 @@ export async function exportClips(
       const coverOk = await execFileAsync(
         resolveFfmpegPath(),
         ["-hide_banner", "-v", "error", "-ss", coverAt.toFixed(2), "-i", outPath, "-frames:v", "1", "-q:v", "2", "-y", coverPath],
-        { maxBuffer: 8 * 1024 * 1024 }
+        { maxBuffer: 8 * 1024 * 1024, signal }
       ).then(() => true, () => false);
 
       // SRT 字幕文件:与烧录字幕同一套词/断行/时间基(跳剪重映射后),
@@ -1696,6 +1704,15 @@ export async function exportClips(
         coverSelection,
       });
       onProgress?.({ current: i + 1, total: totalUnits, clipId: clip.id, stage: "done" });
+      } catch (error) {
+        // 用户取消照常向上抛;其余失败留痕后继续下一条。
+        if (signal?.aborted) throw error;
+        failures.push({
+          id: clip.id,
+          title: clip.title,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     signal?.throwIfAborted();
@@ -1811,7 +1828,7 @@ export async function exportClips(
         return execFileAsync(
           resolveFfmpegPath(),
           ["-hide_banner", "-v", "error", "-i", src, "-vf", coverFilter(spec), "-frames:v", "1", "-q:v", "2", "-y", dest],
-          { maxBuffer: 8 * 1024 * 1024 }
+          { maxBuffer: 8 * 1024 * 1024, signal }
         ).then(() => true, () => false);
       }, Boolean(options.aigcLabel), uiLang(options.locale)).catch(() => []);
     }
@@ -1838,8 +1855,11 @@ export async function exportClips(
             "-i", inputPath,
             "-c", "copy", "-y", dest,
           ],
-          { maxBuffer: 8 * 1024 * 1024 }
-        ).catch(() => {});
+          { maxBuffer: 8 * 1024 * 1024, signal }
+        ).catch((error) => {
+          // 用户取消就停:留证包是逐条循环,压着继续跑会拖住整个取消
+          if (signal?.aborted) throw error;
+        });
       }
     }
 
@@ -1966,8 +1986,18 @@ export async function exportClips(
           ...(spec?.meta ?? {}),
         };
       }),
+      // 没出成的切片:id/标题/原因。部分失败时成片台账照常可用,失败的另一半
+      // 也能在机器可读的回执里对上账(重跑那几条即可)。
+      failedClips: failures.length > 0
+        ? failures.map((f) => ({ id: f.id, title: f.title, error: f.error }))
+        : null,
     };
     await writeFile(join(outDir, "clips.json"), JSON.stringify(metadata, null, 2), "utf8").catch(() => {});
+
+    // 一条都没成:别让调用方以为「导出完成 0 条」,把真实原因抛上去
+    if (results.length === 0 && failures.length > 0) {
+      throw new Error(`全部切片导出失败 / every clip failed to export:${failures[0].error}`);
+    }
 
     // 分发台账(v0.14):逐条「成片↔源区间↔导出时间」记录 + 发布侧留空列,
     // 对上 2026-07 授权审核「一视频一条分发记录」的台账要求。零成本常开。

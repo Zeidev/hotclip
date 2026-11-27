@@ -85,6 +85,14 @@ describe("mapPeakEvents", () => {
     expect(mapPeakEvents(track, segments, 100, 8).length).toBe(2);
   });
 
+  it("接缝有交叉淡化时,xfade 把后面的事件整体提前", () => {
+    // 第一处接缝交叠 0.5s → 成片短 0.5s,第二段的峰从 6s 挪到 5.5s
+    expect(mapPeakEvents(track, segments, 100, 8, 0.5)).toEqual([
+      { srcSec: 102, outSec: 2 },
+      { srcSec: 110, outSec: 5.5 },
+    ]);
+  });
+
   it("输出时间超出切片时长的峰被丢掉", () => {
     expect(mapPeakEvents(track, null, 100, 5).map((p) => p.outSec)).toEqual([2]);
   });

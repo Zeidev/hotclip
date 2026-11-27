@@ -424,6 +424,13 @@ describe("edgeFadeFilters (切点边缘 30ms 淡化防爆音)", () => {
     expect(edgeFadeFilters(0)).toEqual([]);
   });
 
+  it("可以只淡一侧:交叉淡化的接缝不叠首尾淡", () => {
+    expect(edgeFadeFilters(2, { in: false, out: true })).toEqual([
+      `afade=t=out:st=${(2 - EDGE_FADE_SEC).toFixed(3)}:d=${EDGE_FADE_SEC}`,
+    ]);
+    expect(edgeFadeFilters(2, { in: true, out: false })).toEqual([`afade=t=in:st=0:d=${EDGE_FADE_SEC}`]);
+  });
+
   it("copy 模式不受影响:流复制无法加滤镜", () => {
     const args = buildCutArgs("/v/in.mp4", "/v/out.mp4", 10, 20, { mode: "copy" });
     expect(args.join(" ")).not.toContain("afade");
@@ -438,6 +445,22 @@ describe("edgeFadeFilters (切点边缘 30ms 淡化防爆音)", () => {
     expect(fc.match(/afade=t=out/g)).toHaveLength(2);
     // 淡化挂在 asetpts 之后、进 concat 之前(段内相对时间轴)
     expect(fc).toContain(`asetpts=PTS-STARTPTS,afade=t=in:st=0:d=${EDGE_FADE_SEC},afade=t=out:st=1.970:d=${EDGE_FADE_SEC}[a0]`);
+  });
+
+  it("交叉淡化:等功率 acrossfade,且接缝内部不再叠首尾淡", () => {
+    const segs = [
+      { startSec: 10, endSec: 12 },
+      { startSec: 15, endSec: 17 },
+      { startSec: 20, endSec: 22 },
+    ];
+    const args = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 10, segs, { transitionSec: 0.3 });
+    const fc = args[args.indexOf("-filter_complex") + 1];
+    expect(fc).toContain("acrossfade=d=0.300:c1=qsin:c2=qsin");
+    expect(fc).not.toContain("c1=tri");
+    // Only the two outer ends keep a 30ms fade; the seamed ends would notch
+    // the blend (audible dip).
+    expect(fc.match(/afade=t=in/g)).toHaveLength(1);
+    expect(fc.match(/afade=t=out/g)).toHaveLength(1);
   });
 });
 
@@ -500,7 +523,7 @@ describe("冷开场接缝过场(buildColdSeamArgs)", () => {
     const args = buildColdSeamArgs("/m/hook.mp4", "/m/body.mp4", "/m/out.mp4", { ...base, transition: "fade" });
     const fc = args[args.indexOf("-filter_complex") + 1];
     expect(fc).toContain(`xfade=transition=fade:duration=${COLD_SEAM_XFADE_SEC.toFixed(3)}:offset=${(2.5 - COLD_SEAM_XFADE_SEC).toFixed(3)}`);
-    expect(fc).toContain(`acrossfade=d=${COLD_SEAM_XFADE_SEC.toFixed(3)}:c1=tri:c2=tri`);
+    expect(fc).toContain(`acrossfade=d=${COLD_SEAM_XFADE_SEC.toFixed(3)}:c1=qsin:c2=qsin`);
     expect(args.slice(args.indexOf("-map"), args.indexOf("-map") + 4)).toEqual(["-map", "[v]", "-map", "[a]"]);
   });
 

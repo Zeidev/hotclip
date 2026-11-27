@@ -61,12 +61,15 @@ export const EDGE_FADE_SEC = 0.03;
  * 段边缘淡入淡出 filter(纯函数)。段太短(≤4×淡化时长)不淡——
  * 淡化会吃掉整段能量,反而比爆音更可闻。
  */
-export function edgeFadeFilters(durationSec: number): string[] {
+export function edgeFadeFilters(
+  durationSec: number,
+  sides: { in: boolean; out: boolean } = { in: true, out: true }
+): string[] {
   if (!(durationSec > EDGE_FADE_SEC * 4)) return [];
-  return [
-    `afade=t=in:st=0:d=${EDGE_FADE_SEC}`,
-    `afade=t=out:st=${(durationSec - EDGE_FADE_SEC).toFixed(3)}:d=${EDGE_FADE_SEC}`,
-  ];
+  const fades: string[] = [];
+  if (sides.in) fades.push(`afade=t=in:st=0:d=${EDGE_FADE_SEC}`);
+  if (sides.out) fades.push(`afade=t=out:st=${(durationSec - EDGE_FADE_SEC).toFixed(3)}:d=${EDGE_FADE_SEC}`);
+  return fades;
 }
 
 export type CutMode = "accurate" | "copy";
@@ -419,6 +422,8 @@ export function buildJumpCutArgs(
   const labels: string[] = [];
   const videoInput = ffmpegVideoStreamSpecifier(options.videoStreamIndex);
   const audioInput = ffmpegAudioStreamSpecifier(options.audioStreamIndex);
+  const transition = Math.max(0, Math.min(options.transitionSec ?? 0, 0.5));
+  const crossfading = transition > 0 && segments.length > 1;
   const punch = options.punchIn;
   const punchW = punch ? evenFrame(punch.width) : 0;
   const punchH = punch ? evenFrame(punch.height) : 0;
@@ -443,8 +448,13 @@ export function buildJumpCutArgs(
       }
     }
     parts.push(`[${videoInput}]${visual.join(",")}[v${i}]`);
-    // 每段两端 30ms 淡化:相邻段的淡出+淡入在拼缝处相接,消掉跳剪爆音
-    const fades = edgeFadeFilters(b - a);
+    // 每段两端 30ms 淡化:相邻段的淡出+淡入在拼缝处相接,消掉跳剪爆音。
+    // 交叉淡化时接缝内部已由 acrossfade 包住,再叠首尾淡入淡出会在
+    // 交叠区里凹一刀(听感是「抖一下」)——只保留整条时间轴最外的两端。
+    const fades = edgeFadeFilters(
+      b - a,
+      crossfading ? { in: i === 0, out: i === segments.length - 1 } : { in: true, out: true }
+    );
     const fadeSuffix = fades.length > 0 ? `,${fades.join(",")}` : "";
     parts.push(`[${audioInput}]atrim=start=${a.toFixed(3)}:end=${b.toFixed(3)},asetpts=PTS-STARTPTS${fadeSuffix}[a${i}]`);
     labels.push(`[v${i}][a${i}]`);
@@ -460,8 +470,7 @@ export function buildJumpCutArgs(
     ...muteRangeFilters(options.muteRanges),
   ];
   const audioOut = audioChain.length > 0 ? "[araw]" : "[aout]";
-  const transition = Math.max(0, Math.min(options.transitionSec ?? 0, 0.5));
-  if (transition > 0 && segments.length > 1) {
+  if (crossfading) {
     // Cross-fade chain: xfade overlaps picture, acrossfade overlaps audio, and
     // both shorten the timeline by the same amount, so they stay in sync.
     const durations = segments.map((s) => Math.max(0, s.endSec - s.startSec));
@@ -475,7 +484,9 @@ export function buildJumpCutArgs(
         `${videoLabel}[v${i}]xfade=transition=fade:duration=${transition.toFixed(3)}:offset=${offset}${last ? concatOut : `[vx${i}]`}`
       );
       parts.push(
-        `${audioLabel}[a${i}]acrossfade=d=${transition.toFixed(3)}:c1=tri:c2=tri${last ? audioOut : `[ax${i}]`}`
+        // qsin = equal-power: a linear (tri) cross-fade dips ~3 dB where two
+        // uncorrelated voices overlap, which reads as a hiccup at every seam.
+        `${audioLabel}[a${i}]acrossfade=d=${transition.toFixed(3)}:c1=qsin:c2=qsin${last ? audioOut : `[ax${i}]`}`
       );
       videoLabel = `[vx${i}]`;
       audioLabel = `[ax${i}]`;
@@ -690,7 +701,7 @@ export function buildColdSeamArgs(
     "-i", bodyPath,
     "-filter_complex",
     `[0:v][1:v]xfade=transition=${name}:duration=${dur.toFixed(3)}:offset=${offset}[v];` +
-      `[0:a][1:a]acrossfade=d=${dur.toFixed(3)}:c1=tri:c2=tri[a]`,
+      `[0:a][1:a]acrossfade=d=${dur.toFixed(3)}:c1=qsin:c2=qsin[a]`,
     "-map", "[v]",
     "-map", "[a]",
     ...videoEncoderArgs(options.encoder ?? "libx264", Number(crf), preset),

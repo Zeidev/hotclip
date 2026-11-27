@@ -121,29 +121,36 @@ export function planBeatSnap(
   const ordered = [...beats].sort((a, b) => a - b);
   let snapped = 0;
   let keptSec = 0;
-  const next = segments.map((segment, index) => {
+  const next: Array<{ startSec: number; endSec: number }> = [];
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
     // Output-time position of this splice: everything kept before it, minus one
     // cross-fade per splice already crossed (xfade/concat semantics in cut.ts).
     const atSec = keptSec - transitionSec * index;
-    keptSec += Math.max(0, segment.endSec - segment.startSec);
-    if (index === 0) return { ...segment };
-    let best: number | null = null;
-    for (const beat of ordered) {
-      if (beat > atSec) break;
-      if (atSec - beat <= maxShiftSec) best = beat;
+    let placed = { ...segment };
+    if (index > 0) {
+      let best: number | null = null;
+      for (const beat of ordered) {
+        if (beat > atSec) break;
+        if (atSec - beat <= maxShiftSec) best = beat;
+      }
+      // A snap on an earlier splice shortened that segment, so this splice now
+      // sits earlier on the output timeline — atSec above already reflects it.
+      if (best !== null && atSec - best >= 1e-3) {
+        // Same amount, measured on the source timeline: the cut moves back into
+        // the silence this splice is about to remove, so the beat lands on it.
+        const shifted = segment.startSec - (atSec - best);
+        // Never let a shift swallow the previous segment or collapse this one.
+        // (epsilon: 5.2 - 5 evaluates to 0.20000000000000018)
+        if (shifted > segments[index - 1].endSec + 1e-6 && segment.endSec - shifted > 0.2 + 1e-6) {
+          snapped++;
+          placed = { startSec: Number(shifted.toFixed(3)), endSec: segment.endSec };
+        }
+      }
     }
-    if (best === null) return { ...segment };
-    // Already on the grid: nothing to do, and don't count it as a snap.
-    if (atSec - best < 1e-3) return { ...segment };
-    // Same amount, measured on the source timeline: the cut moves back into the
-    // silence this splice is about to remove, so the beat lands on the splice.
-    const shifted = segment.startSec - (atSec - best);
-    // Never let a shift swallow the previous segment or collapse this one.
-    // (epsilon: 5.2 - 5 evaluates to 0.20000000000000018)
-    if (shifted <= segments[index - 1].endSec + 1e-6 || segment.endSec - shifted <= 0.2 + 1e-6) return { ...segment };
-    snapped++;
-    return { startSec: Number(shifted.toFixed(3)), endSec: segment.endSec };
-  });
+    next.push(placed);
+    keptSec += Math.max(0, placed.endSec - placed.startSec);
+  }
   return { segments: next, snapped };
 }
 

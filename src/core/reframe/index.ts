@@ -187,18 +187,27 @@ export async function generateCropPlan(
   };
 }
 
-/** Map a clip-relative source time onto the jump-cut output timeline (null = spliced out). */
+/**
+ * Map a clip-relative source time onto the jump-cut output timeline (null =
+ * spliced out). `transitionSec` is the cross-fade length at each splice: an
+ * xfade shortens the output by its own duration, so every splice already
+ * crossed pulls all later output times earlier. Leaving it out makes SFX,
+ * autozoom cues and crop keyframes drift `transitionSec` later per splice.
+ */
 export function mapToOutputTime(
   tClipRel: number,
   segments: Array<{ startSec: number; endSec: number }>,
-  clipStartSec: number
+  clipStartSec: number,
+  transitionSec = 0
 ): number | null {
   const tAbs = tClipRel + clipStartSec;
+  const xfade = Math.max(0, transitionSec);
   let out = 0;
-  for (const seg of segments) {
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
     if (tAbs < seg.startSec) return null;
     if (tAbs <= seg.endSec) return out + (tAbs - seg.startSec);
-    out += seg.endSec - seg.startSec;
+    out += seg.endSec - seg.startSec - (i < segments.length - 1 ? xfade : 0);
   }
   return null;
 }
@@ -211,7 +220,8 @@ export function mapToOutputTime(
 export function remapCropKeyframes(
   keyframes: CropKeyframe[],
   segments: Array<{ startSec: number; endSec: number }>,
-  clipStartSec: number
+  clipStartSec: number,
+  transitionSec = 0
 ): CropKeyframe[] {
   if (keyframes.length === 0) return [];
   const out: CropKeyframe[] = [];
@@ -232,13 +242,19 @@ export function remapCropKeyframes(
       out.push({ ...keyframe, t: outOffset + keyframe.t - sourceStart });
     }
     const hasFollowingSegment = i < segments.length - 1;
+    // An xfade starts blending the next piece in `xfade` seconds before this
+    // piece's source range ends, so the splice — and the framing switch — sits
+    // there on the stitched output, and every later piece starts that much
+    // earlier. The crop filter runs on the blended frame, so the switch is timed
+    // to the blend, not to the raw source end.
+    const xfade = hasFollowingSegment ? Math.max(0, Math.min(transitionSec, duration / 2)) : 0;
     const seamInset = hasFollowingSegment ? Math.min(0.001, duration / 2) : 0;
     out.push({
-      t: outOffset + duration - seamInset,
+      t: outOffset + duration - xfade - seamInset,
       x: cropXAtTime(keyframes, sourceEnd - seamInset),
       hold: true,
     });
-    outOffset += duration;
+    outOffset += duration - xfade;
   }
   return compileCropKeyframes(out);
 }

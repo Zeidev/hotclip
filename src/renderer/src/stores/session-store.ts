@@ -50,7 +50,7 @@ export const EMPTY_STATS: DetectStats = {
   referenceError: null,
 };
 
-interface SessionState {
+export interface SessionState {
   file: ProbedFile | null;
   transcript: Transcript | null;
   /** 托管模式:每一步自动推进(导入卡上的「一键托管」)。 */
@@ -336,6 +336,27 @@ export function sessionCheckpointFromState(state: SessionState = useSession.getS
     ...(state.editHistory.undo.length + state.editHistory.redo.length > 0 ? { editHistory: state.editHistory } : {}),
     savedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * 这次 store 变化是否需要重开自动保存的防抖窗口。
+ * 检测进度/阶段是每几百毫秒一跳的瞬态字段,不进 checkpoint;若它们也重开窗口,
+ * 650ms 防抖永远等不到安静,草稿就一直不落盘。逐字段比对引用即可
+ * (每次真实改动都产生新对象数组,zustand 不做原地修改)。
+ */
+export function checkpointFieldsChanged(prev: SessionState, next: SessionState): boolean {
+  return (
+    prev.file !== next.file ||
+    prev.transcript !== next.transcript ||
+    prev.candidates !== next.candidates ||
+    prev.selected !== next.selected ||
+    prev.focusedId !== next.focusedId ||
+    prev.stats !== next.stats ||
+    prev.diarize !== next.diarize ||
+    prev.referencePath !== next.referencePath ||
+    prev.paramsDirty !== next.paramsDirty ||
+    prev.editHistory !== next.editHistory
+  );
 }
 
 /** Build the first stable document for a freshly probed source before it enters the live store. */

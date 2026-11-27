@@ -170,7 +170,11 @@ function latinBreakIndex(
   if (!stop.has(foldStopWord(line[line.length - 1].text, lang))) return -1;
   const min = maxLineUnits * LOOKBACK_MIN_FRAC;
   let prefix = 0;
-  const prefixUnits = line.map((wd) => (prefix += widthUnits(wd.text)));
+  // Rendered width includes the spaces the layout inserts between latin tokens.
+  const prefixUnits = line.map((wd, i) => {
+    if (i > 0 && needsSpaceAfter(line[i - 1].text, wd.text)) prefix += 1;
+    return (prefix += widthUnits(wd.text));
+  });
   for (let k = line.length - 1; k >= 0; k--) {
     if (prefixUnits[k] < min) break;
     if (!stop.has(foldStopWord(line[k].text, lang))) return k;
@@ -236,10 +240,11 @@ export function planReadableCaptions(
   maxUnits: number,
   forcedBreaks: number[] = [],
   endSec = Infinity,
-  lang?: AppLang
+  lang?: AppLang,
+  keywords: string[] = []
 ): PlannedCaptionLine[] {
   const breaks = [...forcedBreaks].filter(Number.isFinite).sort((a, b) => a - b);
-  const grouped = groupWordsIntoLines(words, maxUnits, breaks, lang);
+  const grouped = groupWordsIntoLines(words, maxUnits, breaks, lang, keywords);
   const merged: TranscriptWord[][] = [];
   for (const line of grouped) {
     const previous = merged[merged.length - 1];
@@ -249,7 +254,7 @@ export function planReadableCaptions(
     const sameSpeaker = previous && new Set([...previous, ...line].map((w) => w.speaker ?? -1)).size === 1;
     const crosses = previous && breaks.some((b) => b > previous[0].startSec && b <= start + 1e-6);
     if (short && sameSpeaker && !crosses && start >= prevEnd - 0.001 && start - prevEnd <= 0.25 &&
-        [...previous, ...line].reduce((n, w) => n + widthUnits(w.text), 0) <= maxUnits) previous.push(...line);
+        lineWidthUnits([...previous, ...line], keywords) <= maxUnits) previous.push(...line);
     else merged.push([...line]);
   }
   return merged.map((line, i) => {
@@ -274,7 +279,11 @@ export function planReadableCaptions(
 function particleBreakIndex(line: TranscriptWord[], maxLineUnits: number): number {
   const min = maxLineUnits * LOOKBACK_MIN_FRAC;
   let prefix = 0;
-  const prefixUnits = line.map((wd) => (prefix += widthUnits(wd.text)));
+  // Rendered width includes the spaces the layout inserts between latin tokens.
+  const prefixUnits = line.map((wd, i) => {
+    if (i > 0 && needsSpaceAfter(line[i - 1].text, wd.text)) prefix += 1;
+    return (prefix += widthUnits(wd.text));
+  });
   for (let k = line.length - 2; k >= 0; k--) {
     if (prefixUnits[k] >= min && BREAK_AFTER_PARTICLE.test(line[k].text)) return k;
   }
@@ -295,7 +304,8 @@ export function groupWordsIntoLines(
   words: TranscriptWord[],
   maxLineUnits: number,
   forcedBreaks: number[] = [],
-  lang?: AppLang
+  lang?: AppLang,
+  keywords: string[] = []
 ): TranscriptWord[][] {
   const GAP_BREAK_SEC = 0.8;
   const softBreakMin = maxLineUnits * SOFT_BREAK_MIN_FRAC;
@@ -315,11 +325,13 @@ export function groupWordsIntoLines(
       forced = true;
       bi++;
     }
-    const wUnits = widthUnits(w.text);
+    const wUnits = keywordScaled(w.text, keywords) ? widthUnits(w.text) * KEYWORD_WIDTH_SCALE : widthUnits(w.text);
     const prev = line[line.length - 1];
     const gapBreak = prev !== undefined && w.startSec - prev.endSec > GAP_BREAK_SEC;
     const speakerBreak = prev !== undefined && prev.speaker !== w.speaker && (prev.speaker !== undefined || w.speaker !== undefined);
-    const overflow = units + wUnits > maxLineUnits;
+    // The renderer inserts a space between latin tokens; it is part of the width.
+    const gapUnits = prev !== undefined && needsSpaceAfter(prev.text, w.text) ? 1 : 0;
+    const overflow = units + gapUnits + wUnits > maxLineUnits;
     if (line.length > 0 && (forced || overflow || gapBreak || speakerBreak)) {
       // Width-only overflow backs the break up to the nearest particle boundary
       // so a long comma-free clause doesn't split mid-phrase; the trailing words
@@ -340,18 +352,23 @@ export function groupWordsIntoLines(
           // 下一轮就会把连词单独晾成一行——比行尾留个连词更难看。这种情况
           // 不退,照宽度切(中文粒子路径不受影响,行为不变)。
           const stranded = useLatin &&
-            tail.reduce((n, t) => n + widthUnits(t.text), 0) + wUnits > maxLineUnits;
+            lineWidthUnits(tail, keywords) +
+              (tail.length > 0 && needsSpaceAfter(tail[tail.length - 1].text, w.text) ? 1 : 0) +
+              wUnits >
+              maxLineUnits;
           if (!stranded) carry = line.splice(k + 1);
         }
       }
       flush();
       if (carry.length > 0) {
         line = carry;
-        units = carry.reduce((s, c) => s + widthUnits(c.text), 0);
+        units = lineWidthUnits(carry, keywords);
       }
     }
     line.push(w);
-    units += wUnits;
+    // Post-break the line may be a carried tail, so take the gap from the
+    // word actually preceding `w` now — not from the pre-break `prev`.
+    units += wUnits + (line.length > 1 && needsSpaceAfter(line[line.length - 2].text, w.text) ? 1 : 0);
     // Hard sentence end always flushes; a clause boundary flushes only once the
     // line already carries enough to stand on its own (avoids one-word lines).
     if (HARD_PUNCT_END.test(w.text)) flush();
@@ -421,6 +438,33 @@ function escapeAssText(text: string): string {
 export function needsSpaceAfter(current: string, next: string | undefined): boolean {
   if (!next) return false;
   return !CJK_RE.test(current.slice(-1)) && !CJK_RE.test(next.charAt(0));
+}
+
+/** 关键词高亮在 ASS 里是 \fscx108,行宽必须按放大后的字形算。 */
+const KEYWORD_WIDTH_SCALE = 1.08;
+
+function keywordScaled(text: string, keywords: string[]): boolean {
+  if (keywords.length === 0) return false;
+  const t = text.toLowerCase();
+  return keywords.some((k) => {
+    const kw = k.trim().toLowerCase();
+    return kw.length > 0 && t.includes(kw);
+  });
+}
+
+/**
+ * 一行真正渲染出来有多宽:词宽 + 词间空格 + 关键词高亮的 108% 放大。
+ * 断行只看 widthUnits(w.text) 会漏掉空格(5 个词的拉丁行少算近 20%)和
+ * 高亮放大,行尾就顶出画面。纯函数,可单测。
+ */
+export function lineWidthUnits(line: TranscriptWord[], keywords: string[] = []): number {
+  let units = 0;
+  for (let i = 0; i < line.length; i++) {
+    const w = widthUnits(line[i].text);
+    units += keywordScaled(line[i].text, keywords) ? w * KEYWORD_WIDTH_SCALE : w;
+    if (i + 1 < line.length && needsSpaceAfter(line[i].text, line[i + 1].text)) units += 1;
+  }
+  return units;
 }
 
 /**
@@ -882,8 +926,10 @@ export function buildCaptionAss(
     const maxUnits = captionMaxLineUnits(style, layout);
     // 动态极简与 keyword 同款:先把关键词连成一个词,断块永远不劈开高亮词
     const chunkWords = style === "minimal" ? mergeKeywordWords(words, options.keywords ?? []) : words;
-    const planned = options.readability ? planReadableCaptions(chunkWords, maxUnits, forcedBreaks, options.endSec, options.lang) : undefined;
-    const units = planned ? planned.map((line) => line.words) : groupWordsIntoLines(chunkWords, maxUnits, forcedBreaks, options.lang);
+    // minimal 会给命中词加 108% 放大,行宽要按放大后的字形算;其余风格不缩放关键词
+    const scaleKeywords = style === "minimal" ? (options.keywords ?? []) : [];
+    const planned = options.readability ? planReadableCaptions(chunkWords, maxUnits, forcedBreaks, options.endSec, options.lang, scaleKeywords) : undefined;
+    const units = planned ? planned.map((line) => line.words) : groupWordsIntoLines(chunkWords, maxUnits, forcedBreaks, options.lang, scaleKeywords);
     for (let i = 0; i < units.length; i++) {
       const unit = units[i];
       const start = unit[0].startSec - clipStartSec;
@@ -911,8 +957,10 @@ export function buildCaptionAss(
   } else {
     // keyword style: fuse keyword runs first so line breaks can't split them
     const lineWords = style === "keyword" ? mergeKeywordWords(words, options.keywords ?? []) : words;
-    const planned = options.readability ? planReadableCaptions(lineWords, layout.maxLineUnits, forcedBreaks, options.endSec, options.lang) : undefined;
-    const lines = planned ? planned.map((line) => line.words) : groupWordsIntoLines(lineWords, layout.maxLineUnits, forcedBreaks, options.lang).filter((l) => l.length > 0);
+    // keyword 风格把命中词渲染成 108% 宽(见 keywordText),行宽须跟着算
+    const scaleKeywords = style === "keyword" ? (options.keywords ?? []) : [];
+    const planned = options.readability ? planReadableCaptions(lineWords, layout.maxLineUnits, forcedBreaks, options.endSec, options.lang, scaleKeywords) : undefined;
+    const lines = planned ? planned.map((line) => line.words) : groupWordsIntoLines(lineWords, layout.maxLineUnits, forcedBreaks, options.lang, scaleKeywords).filter((l) => l.length > 0);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const start = line[0].startSec - clipStartSec;

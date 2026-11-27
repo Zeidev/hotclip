@@ -3,7 +3,14 @@
  * 用户,只看到 fetch failed 是不知道下一步的——本地/云端要给不同的指引。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chatComplete, MAX_TOKENS, RETRY_MAX_TOKENS, thinkingParams } from "../highlight/detect";
+import {
+  chatComplete,
+  CHAT_TEMPERATURE,
+  JSON_TEMPERATURE,
+  MAX_TOKENS,
+  RETRY_MAX_TOKENS,
+  thinkingParams,
+} from "../highlight/detect";
 
 const OLLAMA = { baseUrl: "http://localhost:11434/v1", apiKey: "", model: "qwen3:8b" };
 const CLOUD = { baseUrl: "https://api.atlascloud.ai/v1", apiKey: "sk-x", model: "qwen/qwen3.5-flash" };
@@ -92,6 +99,55 @@ describe("chatComplete 请求恢复边界", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(chatComplete(CLOUD, "s", "u")).resolves.toBe('{"clips":[]}');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chatComplete 结构化调用(JSON 模式)", () => {
+  const bodyOf = (call: unknown): Record<string, unknown> =>
+    JSON.parse((call as [string, { body: string }])[1].body) as Record<string, unknown>;
+
+  it("结构化调用带 response_format 并把温度降到判读档", async () => {
+    const fetchMock = vi.fn(async () => chatResponse({ content: '{"clips":[]}' }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(chatComplete(CLOUD, "s", "u", undefined, true)).resolves.toBe('{"clips":[]}');
+    const body = bodyOf(fetchMock.mock.calls[0]);
+    expect(body.response_format).toEqual({ type: "json_object" });
+    expect(body.temperature).toBe(JSON_TEMPERATURE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("创作类调用不带 response_format,温度仍是措辞档", async () => {
+    const fetchMock = vi.fn(async () => chatResponse({ content: "başlık" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(chatComplete(CLOUD, "s", "u")).resolves.toBe("başlık");
+    const body = bodyOf(fetchMock.mock.calls[0]);
+    expect(body.response_format).toBeUndefined();
+    expect(body.temperature).toBe(CHAT_TEMPERATURE);
+  });
+
+  it("网关拒绝 response_format(400)时关掉它重试一次", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("unsupported parameter: response_format", { status: 400 }))
+      .mockResolvedValueOnce(chatResponse({ content: '{"clips":[]}' }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(chatComplete(CLOUD, "s", "u", undefined, true)).resolves.toBe('{"clips":[]}');
+    expect(bodyOf(fetchMock.mock.calls[0]).response_format).toEqual({ type: "json_object" });
+    // 回退只丢 response_format:提示词里的 JSON 说明还在,温度仍是判读档。
+    expect(bodyOf(fetchMock.mock.calls[1]).response_format).toBeUndefined();
+    expect(bodyOf(fetchMock.mock.calls[1]).temperature).toBe(JSON_TEMPERATURE);
+  });
+
+  it("与 Qwen 思考开关同一次回退:两个参数都被拒时都关掉", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("unsupported parameter: response_format", { status: 400 }))
+      .mockResolvedValueOnce(new Response("unsupported parameter: enable_thinking", { status: 400 }))
+      .mockResolvedValueOnce(chatResponse({ content: '{"clips":[]}' }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(chatComplete({ ...CLOUD, model: "qwen3.5-flash" }, "s", "u", undefined, true)).resolves.toBe('{"clips":[]}');
+    expect(bodyOf(fetchMock.mock.calls[2]).response_format).toBeUndefined();
+    expect(bodyOf(fetchMock.mock.calls[2]).enable_thinking).toBeUndefined();
   });
 });
 

@@ -34,9 +34,11 @@ import { detectClipCommands } from "./commands";
 import { applyRuleGate, type GateTier } from "./gate";
 import {
   checkHookQuality,
+  fold,
   hardCodes,
   needsHookRepair,
   quoteKey,
+  ungroundedSpans,
   weaknessCount,
   type HookWarnCode,
 } from "../hook-quality";
@@ -91,6 +93,15 @@ export function thinkingParams(model: string): Record<string, unknown> {
 
 /** 单次调用的输出预算。注意:思考型模型的推理 token 也计入这份预算。 */
 export const MAX_TOKENS = 4000;
+
+/**
+ * 结构化抽取(爆点/复评)的温度:这些调用要的是**判读**,不是创作——0.6 的
+ * 采样温度会让同一份转写两次跑出不同的 id 与分数,重跑对不上账。0.2 仍留一点
+ * 余地(同一段话换种说法),但 score/momentId 这种字段基本稳定。
+ */
+export const JSON_TEMPERATURE = 0.2;
+/** 创作类调用(标题/开场句)的温度:这里要的是措辞多样,不是复现。 */
+export const CHAT_TEMPERATURE = 0.6;
 /** 空正文重试的放大预算:思考型模型把常规预算全烧在推理上时,给足空间再试一次。 */
 export const RETRY_MAX_TOKENS = 16000;
 
@@ -110,7 +121,11 @@ async function chatAttempt(
   signal: AbortSignal | undefined,
   maxTokens: number,
   budget: LlmRequestBudget,
-  includeThinkingParam = true
+  includeThinkingParam = true,
+  /** JSON 模式:要判读结果而不是措辞,见 JSON_TEMPERATURE。 */
+  json = false,
+  /** 允许发 response_format;服务商拒绝时由调用方关掉再来一次。 */
+  includeJsonParam = json
 ): Promise<ChatAttempt> {
   const url = `${llm.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   let res: Awaited<ReturnType<typeof requestLlmText>>;
@@ -127,8 +142,11 @@ async function chatAttempt(
           { role: "system", content: system },
           { role: "user", content: user },
         ],
-        temperature: 0.6,
+        temperature: json ? JSON_TEMPERATURE : CHAT_TEMPERATURE,
         max_tokens: maxTokens,
+        // 结构化调用让服务端自己保证「这是 JSON」——提示词做不到这件事,
+        // 实测主流服务商偶发在 JSON 中间吐杂质 token。不支持的网关见下。
+        ...(includeJsonParam ? { response_format: { type: "json_object" } } : {}),
         ...extraParams(llm.baseUrl),
         ...(includeThinkingParam ? thinkingParams(llm.model) : {}),
       }),
@@ -204,20 +222,42 @@ async function chatAttempt(
  * 3. 仍然空:按证据分因报错(思考模型烧预算/安全审查拦截/服务端偶发),
  *    每条都告诉用户下一步换什么。
  */
-export async function chatComplete(llm: LlmConfig, system: string, user: string, signal?: AbortSignal): Promise<string> {
+export async function chatComplete(
+  llm: LlmConfig,
+  system: string,
+  user: string,
+  signal?: AbortSignal,
+  /** 结构化调用:发 response_format 并降温度(见 JSON_TEMPERATURE)。 */
+  json = false
+): Promise<string> {
   // 参数回退与空正文重试共用时限和一次限流重试额度，不逐层放大请求次数。
   const budget = llmRequestBudget(isLocalBaseUrl(llm.baseUrl) ? LLM_LOCAL_TIMEOUT_MS : LLM_REMOTE_TIMEOUT_MS, 1);
   let includeThinkingParam = Object.keys(thinkingParams(llm.model)).length > 0;
+  let includeJsonParam = json;
   let first: ChatAttempt;
-  try {
-    first = await chatAttempt(llm, system, user, signal, MAX_TOKENS, budget, includeThinkingParam);
-  } catch (e) {
-    // A strict OpenAI-compatible gateway may reject the provider-specific
-    // switch. Retry once without it; ordinary HTTP/auth failures still throw.
-    const message = e instanceof Error ? e.message : String(e);
-    if (!includeThinkingParam || !/HTTP 400/i.test(message) || !/thinking|unknown parameter|unsupported/i.test(message)) throw e;
-    includeThinkingParam = false;
-    first = await chatAttempt(llm, system, user, signal, MAX_TOKENS, budget, false);
+  for (;;) {
+    try {
+      first = await chatAttempt(llm, system, user, signal, MAX_TOKENS, budget, includeThinkingParam, json, includeJsonParam);
+      break;
+    } catch (e) {
+      // A strict OpenAI-compatible gateway may reject an optional parameter.
+      // Drop only the one it named and send again; ordinary HTTP/auth failures
+      // still throw. Each switch is dropped at most once, so this ends.
+      const message = e instanceof Error ? e.message : String(e);
+      if (!/HTTP 400/i.test(message)) throw e;
+      // 网关不认 response_format(不少自建/中转端点直接 400):关掉它再来一次,
+      // 提示词里的 JSON 说明还在,解析层照旧兜底。
+      // 点名的参数优先;只说「不支持某参数」时先丢 response_format——它没了
+      // 提示词里的 JSON 说明还在,而 enable_thinking 关系着思考模型会不会吐空。
+      const namesJson = /response_format|json_object|json mode/i.test(message);
+      const namesThinking = /thinking/i.test(message);
+      const generic = /unknown parameter|unsupported/i.test(message);
+      const dropJson = includeJsonParam && (namesJson || generic);
+      const dropThinking = !dropJson && includeThinkingParam && (namesThinking || generic);
+      if (!dropJson && !dropThinking) throw e;
+      if (dropJson) includeJsonParam = false;
+      if (dropThinking) includeThinkingParam = false;
+    }
   }
   if (first.content) return first.content;
   if (first.reasoning && first.finishReason !== "length") return first.reasoning;
@@ -225,7 +265,7 @@ export async function chatComplete(llm: LlmConfig, system: string, user: string,
   // 更准的诊断;用户主动取消照常中断
   let retry: ChatAttempt | null = null;
   try {
-    retry = await chatAttempt(llm, system, user, signal, RETRY_MAX_TOKENS, budget, includeThinkingParam);
+    retry = await chatAttempt(llm, system, user, signal, RETRY_MAX_TOKENS, budget, includeThinkingParam, json, includeJsonParam);
   } catch (e) {
     if (signal?.aborted) throw e;
     if (e instanceof LlmTransportError) throw e;
@@ -269,7 +309,8 @@ export async function chatCompleteJson<T>(
 ): Promise<T> {
   let lastErr: unknown;
   for (let i = 0; i < JSON_ATTEMPTS; i++) {
-    const content = await chatComplete(llm, system, user, signal);
+    // json:true → 服务端收 response_format,温度降到 0.2,判读结果更稳定。
+    const content = await chatComplete(llm, system, user, signal, true);
     try {
       return parse(content);
     } catch (e) {
@@ -580,9 +621,13 @@ export function applyReviews(
     const fix = r.titleFix?.trim();
     const oldTitleCodes = codesOf(c.title);
     const newTitleCodes = fix ? codesOf(fix) : [];
+    // 出处检查:数字/引文必须真的在片段文本里。改标题最容易「补一个片段里
+    // 没有的锚点」——那种标题最像爆款,却兑现不了,比原来的平标题更糟。
+    const fixGrounded = fix ? ungroundedSpans(fix, c.text, lang).length === 0 : false;
     const titleFix =
       fix &&
       fix !== c.title &&
+      fixGrounded &&
       hardCodes(newTitleCodes).length === 0 &&
       (hardCodes(oldTitleCodes).length > 0 || weaknessCount(newTitleCodes) < weaknessCount(oldTitleCodes))
         ? fix
@@ -621,6 +666,36 @@ export function applyReviews(
       loop: r.loop,
     };
   });
+}
+
+/**
+ * Hold candidates the reviewer never saw at the review tier. A failed or
+ * truncated review batch used to leave its ids `recommended`, so a broken call
+ * became silent consent and hands-off export published them. Downgrade exactly
+ * those ids (drop is never undone): a human still sees them, auto-export skips
+ * them. Pure. */
+export function holdUnreviewed(
+  candidates: HighlightCandidate[],
+  ids: Set<number>,
+  lang: PromptLang = "en"
+): HighlightCandidate[] {
+  if (ids.size === 0) return candidates;
+  const note =
+    lang === "zh"
+      ? "复评未覆盖这条,先降为待审"
+      : lang === "tr"
+        ? "Değerlendirme turu bu kesite ulaşmadı, incelemeye alındı"
+        : "reviewer did not cover this clip — held for a human look";
+  return candidates.map((c) =>
+    ids.has(c.id)
+      ? {
+          ...c,
+          recommended: false,
+          gate: c.gate === "drop" ? "drop" : "review",
+          gateNotes: [...(c.gateNotes ?? []), note],
+        }
+      : c
+  );
 }
 
 /**
@@ -669,6 +744,11 @@ export interface DetectOutcome {
   candidates: HighlightCandidate[];
   /** 本地初筛生效时的漏斗统计;未启用或回退全文时缺省。 */
   funnel?: FunnelStats;
+  /**
+   * 复评有批次失败或漏评:这些 id 已降为 review 档,不会自动发布。
+   * 无遗漏时缺省 —— 把「评审没看过」和「评审看过并放行」分开。
+   */
+  reviewIncomplete?: boolean;
 }
 
 /** Full detection pass. */
@@ -676,12 +756,19 @@ export interface DetectOutcome {
  * 商品词确定性并入候选 keywords:片文本真实包含才算命中(拉丁忽略大小写),
  * 去重保序——关键词字幕的商品强调、发布文案的话题都从这里受益。纯函数。
  */
-export function mergeProductKeywords(keywords: string[], clipText: string, products: string[]): string[] {
+export function mergeProductKeywords(
+  keywords: string[],
+  clipText: string,
+  products: string[],
+  lang: PromptLang = "en"
+): string[] {
   if (products.length === 0) return keywords;
-  const lower = clipText.toLowerCase();
-  const hits = products.map((p) => p.trim()).filter((p) => p && lower.includes(p.toLowerCase()));
-  const seen = new Set(keywords.map((k) => k.toLowerCase()));
-  return [...keywords, ...hits.filter((h) => !seen.has(h.toLowerCase()))];
+  // Turkish folding, not toLowerCase(): "İ".toLowerCase() keeps a combining dot
+  // (U+0307), so "İstanbul" would never match the "istanbul" captions spell.
+  const lower = fold(clipText, lang);
+  const hits = products.map((p) => p.trim()).filter((p) => p && lower.includes(fold(p, lang)));
+  const seen = new Set(keywords.map((k) => fold(k, lang)));
+  return [...keywords, ...hits.filter((h) => !seen.has(fold(h, lang)))];
 }
 
 /** 信号通道拿到的时间刻石上限:提示词里最多给 8 个选项(见 moments.MOMENT_PROMPT_MAX)。 */
@@ -866,9 +953,10 @@ export async function detectHighlights(
       // would silently no-op in caption highlighting anyway;商品词命中的
       // 确定性补齐(不依赖 LLM 记得写),关键词字幕/发布文案都能吃到
       keywords: mergeProductKeywords(
-        sel.keywords.filter((k) => resolved.text.toLowerCase().includes(k.toLowerCase())),
+        sel.keywords.filter((k) => fold(resolved.text, lang).includes(fold(k, lang))),
         resolved.text,
-        products ?? []
+        products ?? [],
+        lang
       ),
       recommended: true,
       reviewNote: "",
@@ -916,6 +1004,7 @@ export async function detectHighlights(
       .sort((a, b) => a.startSec - b.startSec);
   const reviewable = kept.filter((c) => c.boundary !== "signal");
   if (reviewable.length === 0) return { candidates: finish(kept), funnel };
+  const allReviewableIds = new Set(reviewable.map((c) => c.id));
   try {
     // 分批复评:REVIEW_SHAPE 每条约 200-250 token,40 条挤一次会撞上 MAX_TOKENS
     // 截断 JSON(整轮复评 fail-open 掉)。分批后单批仍留在预算内,并且能并行。
@@ -931,12 +1020,23 @@ export async function detectHighlights(
       LLM_PARALLEL
     );
     signal?.throwIfAborted();
-    // applyReviews 按 id 认领,所以跨批合并安全;缺评的 id 保持原样(fail-open)
+    // applyReviews 按 id 认领,所以跨批合并安全;缺评的 id 走 holdUnreviewed
     const reviews = settled.flatMap((s) => s.value ?? []);
-    if (reviews.length === 0) return { candidates: finish(kept), funnel };
-    return { candidates: finish(applyReviews(kept, reviews, lang)), funnel };
-  } catch {
-    return { candidates: finish(kept), funnel };
+    const reviewedIds = new Set(reviews.map((r) => r.id));
+    const missing = new Set([...allReviewableIds].filter((id) => !reviewedIds.has(id)));
+    const reviewed = reviews.length === 0 ? kept : applyReviews(kept, reviews, lang);
+    return {
+      candidates: finish(holdUnreviewed(reviewed, missing, lang)),
+      funnel,
+      ...(missing.size > 0 ? { reviewIncomplete: true } : {}),
+    };
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    return {
+      candidates: finish(holdUnreviewed(kept, allReviewableIds, lang)),
+      funnel,
+      reviewIncomplete: true,
+    };
   }
 }
 

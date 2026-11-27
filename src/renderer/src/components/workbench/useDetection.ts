@@ -10,6 +10,11 @@ import { useLlmStore } from "../../stores/llm-store";
 import { useRenderPrefs } from "../../stores/render-prefs-store";
 import { stripIpcError } from "../../../../shared/transcribe-errors";
 
+// 结果回写的世代号:检测跑在 IPC 上,回来时项目可能已经换了、逐句稿可能已经重转录。
+// 旧一次的结果不能盖到新状态上(store 的 detecting 也只能由当前那次收尾)。
+let detectRunSeq = 0;
+let liveDetectRun = 0;
+
 export function useDetection(): { run: () => Promise<void> } {
   const { config, prefilter, vision } = useLlmStore();
   const { prefs } = useRenderPrefs();
@@ -17,6 +22,13 @@ export function useDetection(): { run: () => Promise<void> } {
   const run = useCallback(async (): Promise<void> => {
     const s = useSession.getState();
     if (!s.transcript || s.detecting) return;
+    const runId = ++detectRunSeq;
+    liveDetectRun = runId;
+    const sourceTranscript = s.transcript;
+    const stale = (): boolean => {
+      const current = useSession.getState();
+      return runId !== liveDetectRun || current.transcript !== sourceTranscript;
+    };
     s.setDetecting(true);
     s.setDetectError(null);
     // 阶段提示只是「卡在哪一步」的标签:主进程发、这里收,漏掉几帧不影响结果。
@@ -41,6 +53,8 @@ export function useDetection(): { run: () => Promise<void> } {
         prefs.promptLang
       );
       const st = useSession.getState();
+      // 换代或换稿:这批结果已经不属于当前会话,整批丢弃。
+      if (stale()) return;
       st.setCandidates(result.candidates);
       st.setStats({
         funnel: result.funnel ?? null,
@@ -59,10 +73,14 @@ export function useDetection(): { run: () => Promise<void> } {
       st.markParamsDirty(false);
     } catch (e) {
       // IPC 包装串只会淹没真正有用的那句话——先剥壳再展示(issue #6)
-      useSession.getState().setDetectError(stripIpcError(e instanceof Error ? e.message : String(e)));
+      // 过期那次的报错同样无关当前会话,不往界面上丢。
+      if (!stale()) useSession.getState().setDetectError(stripIpcError(e instanceof Error ? e.message : String(e)));
     } finally {
       offStage();
-      useSession.getState().setDetecting(false);
+      if (runId === liveDetectRun) {
+        liveDetectRun = 0;
+        useSession.getState().setDetecting(false);
+      }
     }
   }, [config, prefilter, vision, prefs]);
 

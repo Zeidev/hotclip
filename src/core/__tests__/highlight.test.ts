@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { normalizeText, buildTokenIndex, matchQuote, resolveSelection } from "../highlight/match";
-import { parseSelections, dropOverlaps, parseReviews, applyReviews, normalizeScores, clipLengthBounds, mergeProductKeywords, PAYOFF_FLOOR } from "../highlight/detect";
+import { parseSelections, dropOverlaps, parseReviews, applyReviews, holdUnreviewed, normalizeScores, clipLengthBounds, mergeProductKeywords, PAYOFF_FLOOR } from "../highlight/detect";
 import {
   buildHighlightPrompt,
   buildMomentPrompt,
@@ -160,6 +160,32 @@ describe("parseReviews / applyReviews", () => {
     expect(out[0]).toMatchObject({ recommended: false, score: 35, reviewNote: "弱钩子", gate: "drop", gateNotes: ["弱钩子"] });
     expect(out[1]).toMatchObject({ recommended: true, score: 80 });
     expect(out[1].gate).toBeUndefined();
+  });
+
+  it("holds the ids a failed review batch never judged instead of auto-publishing them", () => {
+    const base = {
+      startSec: 0, endSec: 10, text: "", title: "", hook: "", reason: "",
+      boundary: "exact" as const, keywords: [], recommended: true, reviewNote: "",
+    };
+    const cands = [
+      { ...base, id: 1, score: 90 },
+      { ...base, id: 2, score: 80 },
+      { ...base, id: 3, score: 70, gate: "drop" as const, recommended: false },
+    ];
+    const out = holdUnreviewed(cands, new Set([2, 3]), "tr");
+    // reviewed → untouched
+    expect(out[0]).toMatchObject({ recommended: true });
+    expect(out[0].gate).toBeUndefined();
+    // unjudged → review tier, out of the auto-export set
+    expect(out[1]).toMatchObject({ recommended: false, gate: "review" });
+    expect(out[1].gateNotes?.length).toBe(1);
+    // an LLM drop is never softened back to review
+    expect(out[2]).toMatchObject({ recommended: false, gate: "drop" });
+  });
+
+  it("is a no-op when every id is reviewed", () => {
+    const cands = [{ startSec: 0, endSec: 10, text: "", title: "", hook: "", reason: "", boundary: "exact" as const, keywords: [], recommended: true, reviewNote: "", id: 1, score: 90 }];
+    expect(holdUnreviewed(cands, new Set())).toBe(cands);
   });
 
   it("throws on malformed reviewer output", () => {
@@ -757,5 +783,14 @@ describe("商品讲解模式 (product mode)", () => {
     expect(mergeProductKeywords(["iPhone"], "the iphone case", ["IPHONE"])).toEqual(["iPhone"]);
     // 空白商品词被忽略
     expect(mergeProductKeywords([], "some text", ["  ", ""])).toEqual([]);
+  });
+
+  it("mergeProductKeywords:Türkçe İ/I 折叠(JS toLowerCase 的 U+0307 陷阱)", () => {
+    // "İ".toLowerCase() = "i" + U+0307 — plain includes() never matches "istanbul"
+    expect(mergeProductKeywords([], "İstanbul'da yeni bir telefon aldım", ["istanbul"], "tr")).toEqual(["istanbul"]);
+    // I→ı folding both ways
+    expect(mergeProductKeywords([], "ISITICI çok iyi", ["ısıtıcı"], "tr")).toEqual(["ısıtıcı"]);
+    // Dedupe under the same fold
+    expect(mergeProductKeywords(["İstanbul"], "istanbul harika", ["istanbul"], "tr")).toEqual(["İstanbul"]);
   });
 });

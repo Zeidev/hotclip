@@ -127,18 +127,21 @@ export interface PeakEventPair {
  * 第一块就是 clipStartSec),而 mapToOutputTime 收的是**切片相对**时间——
  * 这里先减掉 clipStartSec 再映射;直接把绝对时间喂进去会多叠一次偏移,
  * 每个事件都落到所有保留段之外,成对结果恒为空(闪现从不触发)。
- * 被剪掉的空隙里的事件没有输出时间,直接丢。纯函数。
+ * 被剪掉的空隙里的事件没有输出时间,直接丢。transitionSec 是接缝交叉淡化的长度
+ * (xfade 会把成片按自身时长缩短),不传它每个接缝后面的事件都会晚 transitionSec。
+ * 纯函数。
  */
 export function mapPeakEvents(
   track: PeakTrack,
   segments: Array<{ startSec: number; endSec: number }> | null,
   clipStartSec: number,
-  clipDurationSec: number
+  clipDurationSec: number,
+  transitionSec = 0
 ): PeakEventPair[] {
   const pairs: PeakEventPair[] = [];
   for (const e of findPeakEvents(track)) {
     const relSec = e.atSec - clipStartSec;
-    const outSec = segments ? mapToOutputTime(relSec, segments, clipStartSec) : relSec;
+    const outSec = segments ? mapToOutputTime(relSec, segments, clipStartSec, transitionSec) : relSec;
     if (outSec === null || outSec < 0 || outSec > clipDurationSec) continue;
     pairs.push({ srcSec: e.atSec, outSec });
   }

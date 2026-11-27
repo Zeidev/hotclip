@@ -31,7 +31,8 @@ describe("groupWordsIntoLines 拉丁文行尾规则", () => {
   it("TR 长句断行不让行尾落在连词上,默认路径逐字不变", () => {
     const tr = words(TR_SENTENCE);
     const grouped = groupWordsIntoLines(tr, 12, [], "tr");
-    expect(linesOf(grouped)).toEqual(["bu akşam", "sinemaya", "gidiyoruz", "ve yarın sabah", "erken", "kalkacağız"]);
+    // 行宽含词间空格(渲染器插的),所以「ve yarın sabah」实际 14 > 12,提前断。
+    expect(linesOf(grouped)).toEqual(["bu akşam", "sinemaya", "gidiyoruz", "ve yarın", "sabah erken", "kalkacağız"]);
     expect(lastWords(grouped)).not.toContain("ve");
     // 词序不动、词不拆:拼回去就是原句
     expect(unbroken(grouped)).toEqual(TR_SENTENCE);

@@ -67,6 +67,25 @@ describe("beat snap", () => {
     expect(result.segments[1]).toEqual({ startSec: 4.95, endSec: 7 });
   });
 
+  it("accumulates the snapped lengths, so a later splice sees its true position", () => {
+    // The first snap starts piece 2 0.15 s earlier in the source while its end
+    // stays put — the piece is now 0.15 s longer, so splice 2 actually sits at
+    // output 4.05 s (a beat). The old code summed the original 2.15+1.75 =
+    // 3.90 s, found no beat within reach, and left the third cut unsnapped.
+    const result = planBeatSnap(
+      [
+        { startSec: 0, endSec: 2.15 },
+        { startSec: 5.15, endSec: 6.9 },
+        { startSec: 10, endSec: 12 },
+      ],
+      GRID,
+      { maxShiftSec: 0.2 }
+    );
+    expect(result.snapped).toBe(2);
+    expect(result.segments[1]).toEqual({ startSec: 5, endSec: 6.9 });
+    expect(result.segments[2]).toEqual({ startSec: 9.95, endSec: 12 });
+  });
+
   it("counts a cross-fade when locating the splice", () => {
     // With no cross-fade the junction sits at output 2.0 s (a beat, no snap);
     // a 0.4 s cross-fade moves it to 1.6 s, which pulls toward 1.5.

@@ -5,7 +5,7 @@
  * İ/ı 折叠(直接 toLowerCase 会得到 i + U+0307,永远匹配不到 ASCII)。
  */
 import { describe, it, expect } from "vitest";
-import { checkHookQuality, countUnits, hookFlagNotes, filterDuplicatePackagings, type HookCandidate } from "../hook-quality";
+import { checkHookQuality, countUnits, hookFlagNotes, filterDuplicatePackagings, ungroundedSpans, type HookCandidate } from "../hook-quality";
 
 const zh = (items: HookCandidate[]) => checkHookQuality(items, { lang: "zh", surface: "publish" });
 const codesOf = (flags: ReturnType<typeof checkHookQuality>, id: number) => flags.find((f) => f.id === id)?.codes ?? [];
@@ -200,5 +200,33 @@ describe("filterDuplicatePackagings", () => {
 
   it("空标题丢掉", () => {
     expect(filterDuplicatePackagings([{ title: "  " }, { title: "真的不同" }], get, { title: "原标题" }, "zh")).toHaveLength(1);
+  });
+});
+
+/**
+ * 出处检查(ungroundedSpans):改标题最容易「补一个片段里没有的锚点」,那种
+ * 标题最像爆款却兑现不了。数字与引文是唯一可机器核对的锚点,只查这两类。
+ */
+describe("ungroundedSpans", () => {
+  const CLIP = "Mahkeme 50 bin lira ceza istedi. Bunu kimse söylemiyor ama kasanın anahtarı onda.";
+
+  it("片段里有的数字/引文放行(千分位、小数点差异不算改数)", () => {
+    expect(ungroundedSpans("50 bin liralık dava", CLIP, "tr")).toEqual([]);
+    // 「50.000」与「50000」按同一个数比较(千分位只是写法)。
+    expect(ungroundedSpans("Mahkeme 50.000 lira istedi", "Mahkeme 50000 lira istedi", "tr")).toEqual([]);
+    // 但 50 与 500 是两个数,不能因为前缀相同就放行。
+    expect(ungroundedSpans("500 bin lira", "50 bin lira", "tr")).toEqual(["500"]);
+    expect(ungroundedSpans("7,5 sene sonra", "7.5 sene önce", "tr")).toEqual([]);
+    expect(ungroundedSpans("«kasanın anahtarı onda» diyor", CLIP, "tr")).toEqual([]);
+  });
+
+  it("凭空出现的数字/引文被点名(引文按语言折叠)", () => {
+    expect(ungroundedSpans("500 bin liralık vantilatör", CLIP, "tr")).toEqual(["500"]);
+    expect(ungroundedSpans("「Kasanın anahtarı bende」 dedi", CLIP, "tr")).toEqual(["Kasanın anahtarı bende"]);
+  });
+
+  it("没有数字/引文的标题永远有出处", () => {
+    expect(ungroundedSpans("Hırsıza hırsız dedim, mahkemeye çıktık", CLIP, "tr")).toEqual([]);
+    expect(ungroundedSpans("", CLIP, "tr")).toEqual([]);
   });
 });

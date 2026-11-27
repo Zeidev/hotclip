@@ -269,6 +269,37 @@ describe("crop trajectory / subject coverage", () => {
     expect(cropXAtTime(mapped, 2)).toBeCloseTo(800, 3);
     expect(cropXAtTime(mapped, 3)).toBeCloseTo(900, 3);
   });
+
+  it("switches framing at the cross-fade, not at the source end", () => {
+    const source = [
+      { t: 0, x: 0 },
+      { t: 10, x: 1000, hold: true },
+    ];
+    const mapped = remapCropKeyframes(source, [
+      { startSec: 100, endSec: 102 },
+      { startSec: 108, endSec: 110 },
+    ], 100, 0.4);
+    // The blend starts 0.4 s before the piece ends, so the second piece's
+    // framing is already on screen at 1.6 s, not at the raw 2 s source end.
+    expect(cropXAtTime(mapped, 1.6)).toBeCloseTo(800, 1);
+    // 0.3 s into the second piece it has moved on from 800, never back near 190.
+    expect(cropXAtTime(mapped, 1.9)).toBeCloseTo(830, 1);
+    // The whole output is 0.4 s shorter than the summed pieces.
+    expect(cropXAtTime(mapped, 3.6)).toBeCloseTo(1000, 1);
+  });
+
+  it("clamps a cross-fade longer than half the piece", () => {
+    const source = [
+      { t: 0, x: 0 },
+      { t: 10, x: 1000, hold: true },
+    ];
+    const mapped = remapCropKeyframes(source, [
+      { startSec: 100, endSec: 101 },
+      { startSec: 108, endSec: 110 },
+    ], 100, 5);
+    // A 5 s blend over a 1 s piece would erase it; clamped to 0.5 s.
+    expect(cropXAtTime(mapped, 0.5)).toBeCloseTo(800, 1);
+  });
 });
 
 describe("OneEuro / smoothstep", () => {
@@ -311,6 +342,12 @@ describe("mapToOutputTime", () => {
     expect(mapToOutputTime(0.5, segments, 10)).toBeCloseTo(0.5, 5); // 10.5 abs
     expect(mapToOutputTime(3, segments, 10)).toBeNull(); // 13 abs — cut out
     expect(mapToOutputTime(5, segments, 10)).toBeCloseTo(3, 5); // 15 abs → 2 + 1
+  });
+
+  it("subtracts each cross-fade crossed from later output times", () => {
+    expect(mapToOutputTime(0.5, segments, 10, 0.4)).toBeCloseTo(0.5, 5); // before seam
+    expect(mapToOutputTime(5, segments, 10, 0.4)).toBeCloseTo(2.6, 5); // 15 abs → 1.6 + 1
+    expect(mapToOutputTime(6, segments, 10, 0.4)).toBeCloseTo(3.6, 5); // output end
   });
 });
 

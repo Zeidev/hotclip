@@ -284,6 +284,11 @@ const browserMock: HotClipApi = {
   async sessionCheckpointClear() {
     mockSessionCheckpoint = null;
   },
+  // 浏览器预览没有关机握手可参与:订阅是空操作,完成信号也无人等。
+  onSessionFlushRequest() {
+    return () => {};
+  },
+  sessionFlushComplete() {},
   async automationTasksGet() {
     return structuredClone(mockAutomationTasks);
   },

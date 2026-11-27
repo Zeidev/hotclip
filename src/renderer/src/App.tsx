@@ -22,7 +22,7 @@ import {
 import { useT, useLocaleStore } from "./i18n/store";
 import { LOCALE_LIST, REGISTRY } from "./i18n/messages";
 import { getApi } from "./api/provider";
-import { initialSessionCheckpoint, sessionCheckpointFromState, useSession, type ProbedFile } from "./stores/session-store";
+import { checkpointFieldsChanged, initialSessionCheckpoint, sessionCheckpointFromState, useSession, type ProbedFile } from "./stores/session-store";
 import { LogoMark, LogoWordmark } from "./components/Logo";
 import { Workbench } from "./components/Workbench";
 import { SettingsView } from "./components/SettingsView";
@@ -428,7 +428,12 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     if (!hydrated) return;
+    let prev = useSession.getState();
     const unsubscribe = useSession.subscribe((state) => {
+      // 只有会落盘的字段变了才重开防抖;检测进度这类瞬态 tick 不能把窗口一直往后推。
+      const changed = checkpointFieldsChanged(prev, state);
+      prev = state;
+      if (!changed) return;
       clearPendingSave();
       const projectId = activeProjectIdRef.current;
       if (!state.file) {
@@ -447,6 +452,15 @@ export default function App(): React.JSX.Element {
       clearPendingSave();
     };
   }, [clearPendingSave, hydrated, saveCheckpoint]);
+
+  // 关窗握手:主进程先请一次落盘,存完(或失败)都回执;主进程另有超时兜底。
+  useEffect(() => {
+    return getApi().onSessionFlushRequest(() => {
+      void flushActiveProject()
+        .catch(() => {})
+        .finally(() => getApi().sessionFlushComplete());
+    });
+  }, [flushActiveProject]);
 
   useEffect(() => {
     if (!restored) return;

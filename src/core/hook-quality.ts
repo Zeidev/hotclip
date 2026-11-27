@@ -168,9 +168,47 @@ export function countUnits(text: string, unit: CountUnit): number {
   return unit === "chars" ? Array.from(t).length : t.split(/\s+/).length;
 }
 
-/** 土耳其语显式折叠(İ→i、I→ı),其余语言普通小写。 */
-function fold(text: string, lang: AppLang): string {
+/**
+ * 土耳其语显式折叠(İ→i、I→ı),其余语言普通小写。
+ * 导出给别处的「文本里有没有这个词」判断复用——JS 的 `"İ".toLowerCase()`
+ * 会留下一个组合点符(i + U+0307),拿它去 includes 永远匹配不上字幕里的 i。
+ */
+export function fold(text: string, lang: AppLang): string {
   return lang === "tr" ? text.replace(/İ/g, "i").replace(/I/g, "ı").toLowerCase() : text.toLowerCase();
+}
+
+/** 数字里的千分位/小数点折叠:「50.000」「50,000」「50000」都算同一个数。 */
+function foldNumber(text: string): string {
+  return text.replace(/(\d)[.,](?=\d)/g, "$1");
+}
+
+/** 标题/开场句里的引文片段(中英土三种引号都收)。 */
+const QUOTED_SPAN_RE = /["“”'‘’「」『』]([^"“”'‘’「」『』]{2,})["“”'‘’「」『』]/gu;
+
+/** 数字序列:区分 50 与 500,把它们拼平后直接做子串比较。 */
+const NUMBER_RE = /\d+(?:[.,]\d+)*/g;
+
+/**
+ * 改后的标题里有哪些「片段里没有的东西」——凭空出现的数字或引文。
+ *
+ * 为什么需要:复评顺手改标题时,模型很爱补一个片段里根本不存在的锚点
+ * (「50 bin liralık vantilatör」这种),读起来最像爆款,却无法兑现。标题是
+ * 承诺,承诺必须有出处;数字和引文是唯一可以机器核对的锚点,所以这两类
+ * 一律要求在片段文本里逐字(数字容千分位/小数点差异)找得到。
+ * 返回违规片段(空数组 = 全部有出处)。
+ */
+export function ungroundedSpans(title: string, clipText: string, lang: AppLang = "en"): string[] {
+  const hayNumbers = foldNumber(clipText);
+  const hayText = fold(clipText, lang);
+  const out: string[] = [];
+  for (const number of title.match(NUMBER_RE) ?? []) {
+    if (!hayNumbers.includes(foldNumber(number))) out.push(number);
+  }
+  for (const quoted of title.match(QUOTED_SPAN_RE) ?? []) {
+    const inner = quoted.slice(1, -1).trim();
+    if (inner && !hayText.includes(fold(inner, lang))) out.push(inner);
+  }
+  return [...new Set(out)];
 }
 
 /** 开头的引号/括号/标点/emoji——套话判定前先剥掉。 */
@@ -274,12 +312,29 @@ const FLAT_CLOSE_RE: Record<AppLang, RegExp> = {
   en: /\b(i am|i'm|it is|it's|we are|we're)\s+\w+ing\s*[.!]*$/i,
 };
 
-/** 标题里有没有锚点:数字、引号里的原话、数量/时间词、或专名(全大写也算)。 */
+/**
+ * 反转/对照的转折词:标题里出现它,读者已经知道「和常识相反」,悬念成立。
+ * 这类标题本来就不该被 no-anchor 单独判弱——实测 27/40 条真实标题只挂
+ * no-anchor,其中大半是「X 不是…」「… ama …」这类结构,返工反而没东西可改。
+ */
+const REVERSAL_RE: Record<AppLang, RegExp> = {
+  zh: /(不是|而是|反而|竟然|其实|却|只会|居然|并不是)/,
+  // Türkçede olumsuzluk çoğu zaman sözcük değil ek: "bitmiyor", "yetmez",
+  // "olmaz" — ek kalıbı da bir dönüş işaretidir.
+  tr: /\b(değil|değilmiş|ama|fakat|rağmen|meğer|oysa|halbuki|yoksa|sanıyordum|sanıyorsun|zannediyorsun)\b|\p{L}+(m[ıi]yor|m[uü]yor|maz|mez|madı|medi)\b/iu,
+  en: /\b(but|yet|instead|actually|never|turns out|isn't|wasn't|doesn't|didn't|don't|can't|won't)\b/i,
+};
+
+/**
+ * 标题里有没有锚点:数字、引号里的原话、数量/时间词、专名(全大写也算),
+ * 或者一个反转转折(不是「讲什么」,是「和你想的不一样」)。
+ */
 function hasAnchor(text: string, lang: AppLang): boolean {
   if (/\d/.test(text)) return true;
   if (/["“”'‘’«»]/.test(text)) return true;
   const folded = fold(text, lang).replace(/[\p{P}\p{S}]+/gu, " ").split(/\s+/).filter(Boolean);
   if (folded.some((t) => ANCHOR_WORDS[lang].includes(t))) return true;
+  if (REVERSAL_RE[lang].test(text)) return true;
   if (lang === "zh") return false;
   // 专名:首词之后的、以大写字母开头的词,或者整词全大写(PVP)
   const raw = text.replace(/[\p{P}\p{S}]+/gu, " ").split(/\s+/).filter(Boolean);

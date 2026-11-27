@@ -234,6 +234,25 @@ function createWindow(): void {
   });
 
   mainWindow.on("ready-to-show", () => mainWindow.show());
+  // 关窗前先让渲染层把草稿落盘:自动保存有 650ms 防抖,关窗那一刻的改动还在计时器里。
+  // 收到回执或等满 2.5s(渲染层卡死/已崩)就照常关,绝不把人锁在窗口里。
+  let closing = false;
+  let flushTimer: ReturnType<typeof setTimeout> | undefined;
+  const finishClose = (): void => {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = undefined;
+    ipcMain.removeListener("hotclip:session-flush-complete", finishClose);
+    mainWindow.close();
+  };
+  mainWindow.on("close", (event) => {
+    if (closing) return;
+    closing = true;
+    event.preventDefault();
+    ipcMain.once("hotclip:session-flush-complete", finishClose);
+    flushTimer = setTimeout(finishClose, 2500);
+    if (mainWindow.webContents.isDestroyed()) finishClose();
+    else mainWindow.webContents.send("hotclip:session-flush-request");
+  });
 
   // External links open in the system browser, never inside the app shell.
   mainWindow.webContents.setWindowOpenHandler((details) => {

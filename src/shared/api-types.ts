@@ -998,6 +998,13 @@ export interface HotClipApi {
   sessionCheckpointSave: (checkpoint: SessionCheckpoint) => Promise<boolean>;
   /** Forget the active session after the user deliberately starts over. */
   sessionCheckpointClear: () => Promise<void>;
+  /**
+   * 主进程要在关窗前请求一次草稿落盘(650ms 防抖窗口里的改动否则会丢)。
+   * 渲染层存完后必须调 sessionFlushComplete(),主进程才真正关窗;返回取消订阅函数。
+   */
+  onSessionFlushRequest: (cb: () => void) => () => void;
+  /** 告诉主进程「草稿已落盘,可以关窗了」(超时兜底在主进程侧)。 */
+  sessionFlushComplete: () => void;
   /** Probe a media file (duration/streams/fps); throws on unreadable input. */
   probeMedia: (filePath: string) => Promise<MediaInfo>;
   /** List selectable transcription engines with install state. */

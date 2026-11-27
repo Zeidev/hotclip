@@ -25,6 +25,12 @@ const api: HotClipApi = {
   sessionCheckpointGet: () => ipcRenderer.invoke("hotclip:session-checkpoint-get"),
   sessionCheckpointSave: (checkpoint) => ipcRenderer.invoke("hotclip:session-checkpoint-save", checkpoint),
   sessionCheckpointClear: () => ipcRenderer.invoke("hotclip:session-checkpoint-clear"),
+  onSessionFlushRequest: (cb) => {
+    const listener = (): void => cb();
+    ipcRenderer.on("hotclip:session-flush-request", listener);
+    return () => ipcRenderer.removeListener("hotclip:session-flush-request", listener);
+  },
+  sessionFlushComplete: () => ipcRenderer.send("hotclip:session-flush-complete"),
   probeMedia: (filePath) => ipcRenderer.invoke("hotclip:probe-media", filePath),
   listAsrEngines: () => ipcRenderer.invoke("hotclip:list-asr-engines"),
   transcribeMedia: (filePath, engineId, apiKey, options) => ipcRenderer.invoke("hotclip:transcribe", filePath, engineId, apiKey, options),
