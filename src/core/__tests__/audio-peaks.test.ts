@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   EDGE_QUIET_PEAK,
   EDGE_QUIET_RUN_SEC,
+  isSpeechEdge,
   peakAt,
   peakInRange,
   peaksFromPcm,
@@ -184,6 +185,29 @@ describe("切点真音频吸附(snapEdgeToQuiet / snapSpansToQuiet)", () => {
     expect(relativeQuietPeak(quiet, 12)).toBe(EDGE_QUIET_PEAK);
     const screaming = trackFrom([[10, 14, 1]]);
     expect(relativeQuietPeak(screaming, 12)).toBeLessThanOrEqual(0.2); // ceiling
+  });
+
+  it("已经是干净的发声交界(词头)→ skipIfOnset 一个字节都不动", () => {
+    // 静音到 10.5,10.5 起发声:词头就切在 10.5
+    const track = trackFrom([[10.5, 12, 0.4]], 10, 13);
+    expect(isSpeechEdge(track, 10.5, "head")).toBe(true);
+    expect(snapEdgeToQuiet(track, 10.5, { bias: "head", oneWay: "earlier", skipIfOnset: true })).toEqual({ sec: 10.5, movedSec: 0 });
+    // 不传它时旧行为:退进停顿 0.07s(开场多一截死气)
+    expect(snapEdgeToQuiet(track, 10.5, { bias: "head", oneWay: "earlier" }).movedSec).toBeLessThan(0);
+    // 词尾镜像
+    expect(isSpeechEdge(track, 12, "tail")).toBe(true);
+    expect(isSpeechEdge(track, 11.5, "tail")).toBe(false);
+  });
+
+  it("切点落在长停顿深处(估词时间偏早)→ speech-edge 贴着发声留 ~0.06s 引子", () => {
+    // 12s 前全是静音:切点 11.5 在停顿中间,不滑就是开场先静 0.5s
+    const track = trackFrom([[12, 13, 0.4]], 10, 14);
+    const start = snapEdgeToQuiet(track, 11.5, { bias: "head", oneWay: "earlier", landing: "speech-edge" });
+    expect(start.sec).toBeGreaterThan(11.85);
+    expect(start.sec).toBeLessThanOrEqual(12);
+    expect(quietRunAt(track, start.sec)).toBe(true);
+    // 缺省 quiet-start:原样(已在静音里)
+    expect(snapEdgeToQuiet(track, 11.5, { bias: "head", oneWay: "earlier" })).toEqual({ sec: 11.5, movedSec: 0 });
   });
 
   it("snapSpansToQuiet:强制剪除区间两端挪到附近谷底,空区间被丢掉", () => {

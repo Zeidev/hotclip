@@ -16,7 +16,7 @@ function track(values: number[], startSec = 0): PeakTrack {
 }
 
 describe("findPeakEvents(峰值事件提取)", () => {
-  it("高于最高峰 75% 的块聚成事件,按峰值从高到低排", () => {
+  it("高于响度水平 75% 的块聚成事件,按持续能量从高到低排", () => {
     // 30 块静音 + 6 块大响(t=1.0s 附近) + 30 块静音 + 3 块次响(t≈2.2s)
     const values = [...Array(30).fill(0.02), 0.7, 0.9, 0.8, 0.75, 0.72, 0.7, ...Array(30).fill(0.02), 0.71, 0.7, 0.69];
     const events = findPeakEvents(track(values));
@@ -24,10 +24,24 @@ describe("findPeakEvents(峰值事件提取)", () => {
     expect(events[0].peak).toBeCloseTo(0.9, 5);
     expect(events[0].atSec).toBeCloseTo(31 / 30, 3);
     expect(events[1].peak).toBeCloseTo(0.71, 5);
+    // 长的那段(0.2s)能量高过短的(0.1s),顺序与旧的峰值序一致
+    expect(events[0].score).toBeGreaterThan(events[1].score);
   });
 
   it("全程近静音返回空(没有情绪高点可言)", () => {
     expect(findPeakEvents(track(Array(60).fill(0.03)))).toHaveLength(0);
+  });
+
+  it("33ms 的一下爆点不能压过 2.5 秒的大笑(旧实现按最高块设地板,整段爆发被埋掉)", () => {
+    // 2.5s 持续 0.6 的爆发 + 单独一块 0.95 的尖峰(碰麦/口水)
+    // 旧地板 = 0.75 × 0.95 = 0.7125 → 爆发整段低于地板,事件表里只剩那一下
+    const values = [...Array(20).fill(0.02), ...Array(75).fill(0.6), ...Array(24).fill(0.02), 0.95];
+    const events = findPeakEvents(track(values));
+    expect(events).toHaveLength(2);
+    expect(events[0].endSec - events[0].startSec).toBeCloseTo(75 / 30, 2); // 长爆发排第一
+    expect(events[0].score).toBeGreaterThan(events[1].score * 10);
+    // 中心取最响那一带的重心,不是随机的某一块
+    expect(events[0].atSec).toBeCloseTo((20 + 94) / 2 / 30, 2);
   });
 });
 

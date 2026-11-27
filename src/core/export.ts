@@ -53,7 +53,7 @@ import {
 import {
   extractPeaks,
   findPeakEvents,
-  mapPeakEvents,
+  mapPeakMoments,
   relativeQuietPeak,
   snapEdgeToQuiet,
   snapSpansToQuiet,
@@ -1060,8 +1060,12 @@ export async function exportClips(
       // 不再补抽——补抽的那份没有边距,末尾静音探不到,两处口径还会不一致。
       // (源时间, 输出时间) 成对保留:运镜强调/音效打点吃输出时间,
       // 爆点闪现要回源片切那一刀、吃源时间
-      const peakEventPairs = clipPeaks ? mapPeakEvents(clipPeaks, plan?.segments ?? null, clip.startSec, clipDuration, options.transitionSec ?? 0) : [];
-      const peakEventsOut = peakEventPairs.map((p) => p.outSec);
+      // 峰值事件按持续能量排好序(第一项就是「最好的那一刻」),带上响区间:
+      // 闪现靠它挑窗,而不是按单块峰值掷骰子
+      const peakMoments = clipPeaks
+        ? mapPeakMoments(clipPeaks, plan?.segments ?? null, clip.startSec, clipDuration, options.transitionSec ?? 0)
+        : [];
+      const peakEventsOut = peakMoments.map((p) => p.outSec);
       // 画面尺寸先算:运镜的输出几何与 punch-in 的拼接口径都要它。
       // uiCrop 会削掉画面高度,运镜的输出高度必须跟着削——运镜后的分片
       // 比正片高几行,拼接(concat/xfade)会直接失败。
@@ -1312,9 +1316,16 @@ export async function exportClips(
         // 0.04% 切片有 visual hook);闪不出来(全程无显著峰)回退钩子句。
         // clip.flashForward 是一片多版的结构差异维度(该变体单独开闪现)
         if (options.flashForward || clip.flashForward) {
-          const farEnough = peakEventPairs
+          // 候选带上持续能量分和响区间:挑窗按「真正炸得久的那一下」,窗盖整段爆发
+          const farEnough = peakMoments
             .filter((p) => p.outSec >= FLASH_SKIP_NEAR_START_SEC)
-            .map((p) => p.srcSec);
+            .map((p) => ({
+              srcSec: p.srcSec,
+              outSec: p.outSec,
+              score: p.score,
+              startSec: p.startSec,
+              endSec: p.endSec,
+            }));
           coldOpenPlan = planFlashForward(
             farEnough,
             plan ? plan.segments : [{ startSec: clip.startSec, endSec: clip.endSec }],
@@ -1338,14 +1349,20 @@ export async function exportClips(
         // 开场第一声就是残词)。用真音频把两端挪到最近的静音/谷底,首端只往前、
         // 尾端只往后——迷你片只会多带一点上下文,不会多切一个词。
         if (coldOpenPlan && clipPeaks) {
+          // skipIfOnset:迷你片两端本来就落在词头/词尾,干净的交界不再往静音里退——
+          // 退出去的只是长停顿的死气(实测开场头 0.33s 没声音)
           const coHead = snapEdgeToQuiet(clipPeaks, coldOpenPlan.startSec, {
             bias: "head",
             oneWay: "earlier",
+            skipIfOnset: true,
+            landing: "speech-edge",
             quietPeak: relativeQuietPeak(clipPeaks, coldOpenPlan.startSec),
           });
           const coTail = snapEdgeToQuiet(clipPeaks, coldOpenPlan.endSec, {
             bias: "tail",
             oneWay: "later",
+            skipIfOnset: true,
+            landing: "speech-edge",
             quietPeak: relativeQuietPeak(clipPeaks, coldOpenPlan.endSec),
           });
           const snapped = { startSec: Math.max(0, coHead.sec), endSec: coTail.sec };

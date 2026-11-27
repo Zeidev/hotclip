@@ -208,6 +208,39 @@ describe("planFlashForward / flashWindow(爆点闪现窗)", () => {
     const p = planFlashForward([106, 110], cut, [at("段内", 110.0, 110.9)])!;
     expect(p.startSec).toBeCloseTo(110.0, 3);
   });
+
+  // 真实素材上量出来的三件事:单块峰值分不开谁更好(0.536-0.566)、
+  // 33ms 的尖峰能和 2.5 秒的大笑并列、按 ±lead/tail 取窗会漏掉整段爆发
+  it("按持续能量挑,不按候选给的顺序(尖峰排前面也抢不走好那一刻)", () => {
+    const spark = { srcSec: 106, score: 0.06, startSec: 105.9, endSec: 106.0 }; // 33ms
+    const laugh = { srcSec: 118, score: 0.9, startSec: 116.9, endSec: 119.4 }; // 2.5s 爆发
+    const p = planFlashForward([spark, laugh], [seg])!;
+    expect(p.startSec).toBeGreaterThan(115); // 闪的是大笑,不是尖峰
+  });
+
+  it("近等候选(分差在 15% 内)挑成片里更靠后的:闪现要剧透结局,不是再演一遍开头", () => {
+    const early = { srcSec: 105, score: 0.5 };
+    const late = { srcSec: 120, score: 0.46 }; // 0.46 ≥ 0.85 × 0.5
+    expect(planFlashForward([early, late], [seg])!.startSec).toBeGreaterThan(115);
+    // 差得够多时仍然选能量高的那个(位置偏好不能盖过真实差距)
+    const weakerLate = { srcSec: 120, score: 0.2 };
+    expect(planFlashForward([early, weakerLate], [seg])!.startSec).toBeLessThan(110);
+  });
+
+  it("事件的响区间决定下限窗:整段爆发从头到尾,超上限就砍引子留余韵", () => {
+    const burst = { srcSec: 106, score: 1, startSec: 105.5, endSec: 107.5 };
+    const win = planFlashForward([burst], [seg])!;
+    expect(win.endSec).toBeCloseTo(107.5 + FLASH_TAIL_SEC, 5);
+    expect(win.startSec).toBeCloseTo(win.endSec - FLASH_MAX_SEC, 5); // 4.75s 的窗收到 3s
+  });
+
+  it("吸附到词边界后也不许超上限(实测 3.34s),从头部整词丢、保住爆点", () => {
+    const words = [at("a", 104.5, 104.9), at("b", 105.0, 105.9), at("c", 106.0, 106.9), at("d", 107.0, 108.3)];
+    const p = planFlashForward([{ srcSec: 106.0, score: 1, startSec: 105.2, endSec: 107.0 }], [seg], words)!;
+    expect(p.endSec - p.startSec).toBeLessThanOrEqual(FLASH_MAX_SEC + 1e-6);
+    expect(p.startSec).toBeCloseTo(106.0, 3); // 丢到「c」为止,b 的尾巴不带进来
+    expect(p.endSec).toBeCloseTo(108.3, 3);
+  });
 });
 
 // coldOpenQuote(选段输出里「片段中段最炸、但不在开头」的一句)出现在 2026-11:

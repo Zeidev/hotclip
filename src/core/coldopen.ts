@@ -108,28 +108,68 @@ export const FLASH_MIN_SEC = 0.3;
 export const FLASH_SKIP_NEAR_START_SEC = 6;
 
 /**
- * 决定爆点闪现(flash-forward)片段:从峰值事件(按强度从高到低,调用方已
- * 过滤掉离输出开头太近的)里挑第一个能在保留区间内装下完整闪现窗的。
+ * 一个闪现候选:峰值事件的完整描述(见 audio-peaks 的 mapPeakMoments)。
+ * 光给一个时刻也能用(旧测试/旧调用),但那样只能按 ±lead/tail 取窗,
+ * 也给不出「谁更值得闪」的排序。
+ */
+export interface FlashCandidate {
+  /** 峰值事件的中心(源片绝对时间)。 */
+  srcSec: number;
+  /** 该事件在成片输出时间轴上的位置——「闪结局」偏好和剧透守卫用它。 */
+  outSec?: number;
+  /** 持续能量分(越响越久越高)。 */
+  score?: number;
+  /** 事件的连续响区间(源片绝对时间):有它时窗盖整段爆发,不是纯 ±lead/tail。 */
+  startSec?: number;
+  endSec?: number;
+}
+
+/**
+ * 近等候选算同一档:实测同一条切片前几名的分差本来就小(单块峰值只差 2%),
+ * 挡在分差里的那点差别不如「闪更靠后的那个」有用。
+ */
+export const FLASH_PAYOFF_TIE_RATIO = 0.85;
+
+/**
+ * 决定爆点闪现(flash-forward)片段:在能在保留区间内装下完整闪现窗的候选
+ * 里挑**最好的那一刻**——先按持续能量分,近分时挑成片里最靠后的那个
+ * (闪现的意义是「把结局先摆出来」,不是再演一遍开头)。
+ *
+ * 旧实现按单块峰值排、挑第一个装得下的:实测 6 个事件峰值只差 2%
+ * (0.536-0.566),等于随机;而且 33ms 的一下爆点能跟 2.5 秒的大笑并列。
+ * 现在排序信号来自 findPeakEvents 的持续能量分,挑窗还会盖住事件的整段爆发。
+ *
  * 传保留区间而不是切片首尾:跳剪/拼接后被剪掉的内容不该出现在闪现里
  * (拼接片的段间空隙也天然被排除——保留段不会跨段)。挑不出返回 null,
  * 与 planColdOpen 同一语义:锦上添花,宁可不做不可做错。纯函数。
  *
  * words 传切片的词流(源片绝对时间)时,窗会吸附到词边界并扩到整句(见
- * flashWindow);不传则退回固定下限窗。
+ * flashWindow)。
  */
 export function planFlashForward(
-  peakAtSec: number[],
+  candidates: Array<number | FlashCandidate>,
   keptSegments: Array<{ startSec: number; endSec: number }>,
   words: TranscriptWord[] = []
 ): ColdOpenPlan | null {
-  for (const at of peakAtSec) {
-    const seg = keptSegments.find((s) => at >= s.startSec && at < s.endSec);
+  const fits: Array<{ win: ColdOpenPlan; score: number; position: number }> = [];
+  for (const raw of candidates) {
+    const cand: FlashCandidate = typeof raw === "number" ? { srcSec: raw } : raw;
+    const seg = keptSegments.find((s) => cand.srcSec >= s.startSec && cand.srcSec < s.endSec);
     if (!seg) continue;
-    const win = flashWindow(at, seg, words);
+    const run =
+      cand.startSec !== undefined && cand.endSec !== undefined && cand.endSec > cand.startSec
+        ? { startSec: cand.startSec, endSec: cand.endSec }
+        : undefined;
+    const win = flashWindow(cand.srcSec, seg, words, run);
     // 1e-6 容差:边界夹取的浮点误差不该把恰好达标的窗判掉
-    if (win.endSec - win.startSec >= FLASH_MIN_SEC - 1e-6) return win;
+    if (win.endSec - win.startSec < FLASH_MIN_SEC - 1e-6) continue;
+    fits.push({ win, score: cand.score ?? 0, position: cand.outSec ?? cand.srcSec });
   }
-  return null;
+  if (fits.length === 0) return null;
+  const best = Math.max(...fits.map((f) => f.score));
+  const band = fits.filter((f) => f.score >= best * FLASH_PAYOFF_TIE_RATIO - 1e-9);
+  // 同档里取成片位置最靠后的:剧透结局(它后面正片会原样再放一遍)
+  return band.reduce((a, b) => (b.position > a.position ? b : a)).win;
 }
 
 /**
@@ -140,17 +180,24 @@ export function planFlashForward(
  *   扩到整句,总长夹在 FLASH_MAX_SEC 内;
  * - 峰值在无人声处(笑声/掌声/音效)时不做词吸附,直接给下限窗——那时的
  *   画面本身就是钩子,硬贴一句话反而错位。
+ * - 传了事件的响区间 run 时,下限窗按 run 取(爆发从头到尾),超上限就砍引子
+ *   留余韵——真正的高潮不能被 FLASH_MAX_SEC 削掉。
  * 纯函数。
  */
 export function flashWindow(
   atSec: number,
   seg: { startSec: number; endSec: number },
-  words: TranscriptWord[]
+  words: TranscriptWord[],
+  run?: { startSec: number; endSec: number }
 ): ColdOpenPlan {
-  const base: ColdOpenPlan = {
+  let base: ColdOpenPlan = {
     startSec: Math.max(seg.startSec, atSec - FLASH_LEAD_SEC),
     endSec: Math.min(seg.endSec, atSec + FLASH_TAIL_SEC),
   };
+  if (run) {
+    const endSec = Math.min(seg.endSec, run.endSec + FLASH_TAIL_SEC);
+    base = { startSec: Math.max(seg.startSec, run.startSec - FLASH_LEAD_SEC, endSec - FLASH_MAX_SEC), endSec };
+  }
   const segWords = words.filter((w) => w.startSec >= seg.startSec - 1e-3 && w.endSec <= seg.endSec + 1e-3);
   // 窗内没有词(峰值落在无人声处)→ 保持下限窗
   if (!segWords.some((w) => w.endSec > base.startSec && w.startSec < base.endSec)) return base;
@@ -178,6 +225,10 @@ export function flashWindow(
   ) {
     j++;
   }
+  // 初始吸附就可能超上限:base 盖住整段爆发时,首词往回收会让总长到 3 秒以上
+  // (实测真片 3.34s,而且开头是从上一句尾巴「olmayacak.」切进去的残句)。
+  // 超了就从头部整词整词地丢,保住爆点和它后面的余韵,窗口不切半个词。
+  while (i < j && spanSec(i, j) > FLASH_MAX_SEC + 1e-6) i++;
   const snapped: ColdOpenPlan = { startSec: segWords[i].startSec, endSec: segWords[j].endSec };
   return snapped.endSec - snapped.startSec >= FLASH_MIN_SEC ? snapped : base;
 }

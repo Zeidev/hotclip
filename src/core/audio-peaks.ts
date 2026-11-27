@@ -109,12 +109,51 @@ export interface EdgeSnapOptions {
   maxShiftSec?: number;
   quietPeak?: number;
   minQuietSec?: number;
+  /**
+   * 切点已经在「静音↔发声」的交界上时不动(词头/句头、词尾)。迷你片两端用它:
+   * 词边界本身就该切在那里,再往静音里退只会把长停顿的死气带进开场
+   * (实测句间停顿 0.43s,退到静音起点让成片头 0.33s 没声音)。
+   */
+  skipIfOnset?: boolean;
+  /**
+   * 挪进静音之后落在哪里:
+   * - "quiet-start"(缺省):静音段的起点 —— 整条片的头/尾用它,能把整段停顿
+   *   留在片内(切片边界本来就该包含它,剪掉只是把内容往外挪)。
+   * - "speech-edge":贴着发声那一侧的边上 —— 迷你片两端用它。开场最贵的
+   *   是前几秒,句间 0.43s 的停顿只该留 ~0.06s 引子,不该整段带进开场。
+   */
+  landing?: "quiet-start" | "speech-edge";
+}
+
+/**
+ * 切点是不是刚好落在发声的边上:
+ * - head:前 ~2 块静、往后一块就响(词头/句头)
+ * - tail:前一块还响、往后 ~2 块静(词尾)
+ */
+export function isSpeechEdge(
+  track: PeakTrack,
+  atSec: number,
+  bias: "head" | "tail",
+  quietPeak = EDGE_QUIET_PEAK
+): boolean {
+  const hop = track.hopSec > 0 ? track.hopSec : 1 / 30;
+  // 直接按块号取,不走 peakInRange:它的窗口末端是 ceil,窗口收到 atSec 之前时
+  // 仍会把**含 atSec 的那一块**算进来,交界点于是被自己判成「一直在响」。
+  const n = track.values.length;
+  const onset = Math.floor((atSec - track.startSec) / hop);
+  if (onset - 2 < 0 || onset + 1 > n - 1) return false;
+  let before = 0;
+  for (let i = onset - 2; i < onset; i++) if (track.values[i] > before) before = track.values[i];
+  let after = 0;
+  for (let i = onset; i <= onset + 1; i++) if (track.values[i] > after) after = track.values[i];
+  return bias === "head" ? before <= quietPeak && after > quietPeak : before > quietPeak && after <= quietPeak;
 }
 
 /**
  * 把切点挪进最近的静音。成片开头/结尾、冷开迷你片两端都是真实切点,截在半个
- * 词上就是「开场第一声是残词」。本身已经在静音里 → 原样返回(movedSec = 0),
- * 好切点一个都不动;找不到静音也原样返回(没有证据就不猜)。
+ * 词上就是「开场第一声是残词」。本身已经在静音里或是干净的发声交界(传
+ * skipIfOnset)→ 原样返回(movedSec = 0),好切点一个都不动;找不到静音也原样
+ * 返回(没有证据就不猜)。
  */
 export function snapEdgeToQuiet(track: PeakTrack, atSec: number, opts: EdgeSnapOptions = {}): QuietEdgeSnap {
   const {
@@ -123,19 +162,37 @@ export function snapEdgeToQuiet(track: PeakTrack, atSec: number, opts: EdgeSnapO
     maxShiftSec = EDGE_SNAP_MAX_SEC,
     quietPeak = EDGE_QUIET_PEAK,
     minQuietSec = EDGE_QUIET_RUN_SEC,
+    skipIfOnset = false,
+    landing = "quiet-start",
   } = opts;
-  if (quietRunAt(track, atSec, quietPeak, minQuietSec)) return { sec: atSec, movedSec: 0 };
+  if (skipIfOnset && isSpeechEdge(track, atSec, bias, quietPeak)) return { sec: atSec, movedSec: 0 };
   const hop = track.hopSec > 0 ? track.hopSec : 1 / 30;
   const steps = Math.max(1, Math.round(maxShiftSec / hop));
   const dirs = oneWay === "earlier" ? [-1] : oneWay === "later" ? [1] : bias === "head" ? [-1, 1] : [1, -1];
-  for (let k = 1; k <= steps; k++) {
+  let found: number | null = quietRunAt(track, atSec, quietPeak, minQuietSec) ? atSec : null;
+  outer: for (let k = 1; found === null && k <= steps; k++) {
     for (const dir of dirs) {
       const t = atSec + dir * k * hop;
       if (quietRunAt(track, t, quietPeak, minQuietSec)) {
-        const sec = Number(t.toFixed(3));
-        return { sec, movedSec: Number((sec - atSec).toFixed(3)) };
+        found = t;
+        break outer;
       }
     }
+  }
+  if (found !== null) {
+    let sec = found;
+    if (landing === "speech-edge") {
+      // 顺着静音往发声那一侧滑到边上(仍不越过 maxShiftSec)。词时间是估的时候,
+      // 切点常落在整段停顿的深处(实测 0.33s 之外),按整段停顿留就是开场先
+      // 静半秒;贴到发声边只留 ~0.06s 引子。
+      const onward = bias === "head" ? 1 : -1;
+      for (let next = sec + onward * hop; Math.abs(next - atSec) <= maxShiftSec + 1e-9; next += onward * hop) {
+        if (!quietRunAt(track, next, quietPeak, minQuietSec)) break;
+        sec = next;
+      }
+    }
+    const out = Number(sec.toFixed(3));
+    return { sec: out, movedSec: Number((out - atSec).toFixed(3)) };
   }
   return { sec: atSec, movedSec: 0 };
 }
@@ -180,24 +237,48 @@ export function snapSpansToQuiet(
 
 /** 一次峰值事件:一段连续的「显著响」区间(笑声/怒吼/掌声的声学代理)。 */
 export interface PeakEvent {
-  /** 事件内最响一块的时刻(绝对源时间,秒)——打点/运镜强调用它。 */
+  /** 事件内最响那一带的中心时刻(绝对源时间,秒)——打点/运镜强调/闪现窗用它。 */
   atSec: number;
   startSec: number;
   endSec: number;
   /** 事件峰值(0..1)。 */
   peak: number;
+  /**
+   * 事件「持续能量」分:块均值 × 时长(封顶 EVENT_SUSTAIN_CAP_SEC)。
+   *
+   * 为什么不按 peak 排:实测同一条切片的前 6 个事件的单块峰值只差 2%
+   * (0.536-0.566),按它排等于掷骰子——而且 33ms 的一下爆点(口水/碰麦)
+   * 单块峰值能和持续 2.5 秒的大笑齐平。谁才是「最好的那一刻」得看响了多久,
+   * 不看那一下有多响。
+   */
+  score: number;
 }
 
 /** 相邻响块间隔小于该值时并成同一事件(笑声中间的换气不该把事件劈两半)。 */
 const EVENT_MERGE_GAP_SEC = 0.35;
+/** 持续能量的时长封顶:超过它以后比的是平均响度,不是「越长越像爆点」。 */
+const EVENT_SUSTAIN_CAP_SEC = 2;
+/** 地板永远不低于峰值这个比例:静音占比高的素材不能让底噪也成「事件」。 */
+const EVENT_FLOOR_MIN_RATIO = 0.25;
+
+/** 全轨响度水平:块峰值的 p98——个别 33ms 爆点影响不到它。 */
+function loudLevel(track: PeakTrack): number {
+  const n = track.values.length;
+  if (n === 0) return 0;
+  const sorted = Array.from(track.values).sort((a, b) => a - b);
+  return sorted[Math.min(n - 1, Math.floor(n * 0.98))];
+}
 
 /**
- * 从峰值轨提取「峰值事件」:高于全轨最高峰 floorRatio 的块聚类成区间,
- * 按事件峰值从高到低返回前 maxEvents 个。全轨近静音(最高峰 < minPeak)
- * 返回空——没有情绪高点可言。纯函数。
+ * 从峰值轨提取「峰值事件」:高于全轨响度水平 floorRatio 倍的块聚类成区间,
+ * 按持续能量分从高到低返回前 maxEvents 个(见 PeakEvent.score——单块峰值
+ * 在同一条片子里几乎拉不开差距,按它排等于随机)。全轨近静音(最高峰 <
+ * minPeak)返回空——没有情绪高点可言。纯函数。
  *
  * 阈值取相对值而非绝对 dB:源素材没归一过响度,绝对阈值在小声素材上会漏、
- * 大声素材上会全命中;「相对本片最响的那一下」才是稳定的情绪峰代理。
+ * 大声素材上会全命中;「相对本片的响度水平」才是稳定的情绪峰代理。
+ * 水平取 p98 而不是最高块:最高块是个别 33ms 的爆点(碰麦/口水/关门)时,
+ * 以它为基准会把整段真正炸得久的爆发全压在地板下——那正是要闪的那一刻。
  */
 export function findPeakEvents(
   track: PeakTrack,
@@ -207,10 +288,10 @@ export function findPeakEvents(
   let maxPeak = 0;
   for (const v of track.values) if (v > maxPeak) maxPeak = v;
   if (maxPeak < minPeak) return [];
-  const floor = maxPeak * floorRatio;
+  const floor = Math.max(loudLevel(track) * floorRatio, maxPeak * EVENT_FLOOR_MIN_RATIO);
 
-  const events: PeakEvent[] = [];
-  let cur: PeakEvent | null = null;
+  const events: Array<Omit<PeakEvent, "score">> = [];
+  let cur: Omit<PeakEvent, "score"> | null = null;
   for (let i = 0; i < track.values.length; i++) {
     const v = track.values[i];
     const t = track.startSec + i * track.hopSec;
@@ -228,7 +309,32 @@ export function findPeakEvents(
     }
   }
   if (cur) events.push(cur);
-  return events.sort((a, b) => b.peak - a.peak).slice(0, maxEvents);
+
+  // 持续能量 + 中心时刻(只在这一段里算,峰值事件是稀疏的,不心疼)
+  const scored = events.map((e): PeakEvent => {
+    const from = Math.max(0, Math.floor((e.startSec - track.startSec) / track.hopSec));
+    const to = Math.min(track.values.length, Math.ceil((e.endSec - track.startSec) / track.hopSec));
+    let sum = 0;
+    let blocks = 0;
+    for (let i = from; i < to; i++) {
+      sum += track.values[i];
+      blocks++;
+    }
+    const mean = blocks > 0 ? sum / blocks : 0;
+    const sec = blocks * track.hopSec;
+    // atSec 取「最响那一带」的重心(≥90% 峰值的块),而不是随机的单个块:
+    // 同响度的几块连成一片时,落在哪一块纯看浮点噪声。
+    let sumT = 0;
+    let n = 0;
+    for (let i = from; i < to; i++) {
+      if (track.values[i] >= e.peak * 0.9) {
+        sumT += track.startSec + i * track.hopSec;
+        n++;
+      }
+    }
+    return { ...e, atSec: n > 0 ? sumT / n : e.atSec, score: mean * Math.min(sec, EVENT_SUSTAIN_CAP_SEC) };
+  });
+  return scored.sort((a, b) => b.score - a.score || b.peak - a.peak).slice(0, maxEvents);
 }
 
 /** 峰值事件的两种时间坐标:源片绝对时间(要拿它回源片切刀)与输出时间(打点)。 */
@@ -255,12 +361,38 @@ export function mapPeakEvents(
   clipDurationSec: number,
   transitionSec = 0
 ): PeakEventPair[] {
-  const pairs: PeakEventPair[] = [];
+  return mapPeakMoments(track, segments, clipStartSec, clipDurationSec, transitionSec).map(({ srcSec, outSec }) => ({
+    srcSec,
+    outSec,
+  }));
+}
+
+/** 峰值事件连同它的持续能量分与响区间(闪现挑「最好的那一刻」要用)。 */
+export interface PeakMomentPair extends PeakEventPair {
+  score: number;
+  /** 事件的连续响区间(源片绝对时间)。 */
+  startSec: number;
+  endSec: number;
+  peak: number;
+}
+
+/**
+ * mapPeakEvents 的完整版:除了 (源时间, 输出时间),还带上打分与响区间。
+ * 排序沿用 findPeakEvents 的持续能量序(第一项就是最好的那一刻)。
+ */
+export function mapPeakMoments(
+  track: PeakTrack,
+  segments: Array<{ startSec: number; endSec: number }> | null,
+  clipStartSec: number,
+  clipDurationSec: number,
+  transitionSec = 0
+): PeakMomentPair[] {
+  const pairs: PeakMomentPair[] = [];
   for (const e of findPeakEvents(track)) {
     const relSec = e.atSec - clipStartSec;
     const outSec = segments ? mapToOutputTime(relSec, segments, clipStartSec, transitionSec) : relSec;
     if (outSec === null || outSec < 0 || outSec > clipDurationSec) continue;
-    pairs.push({ srcSec: e.atSec, outSec });
+    pairs.push({ srcSec: e.atSec, outSec, score: e.score, startSec: e.startSec, endSec: e.endSec, peak: e.peak });
   }
   return pairs;
 }
