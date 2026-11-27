@@ -132,8 +132,16 @@ jobs:
             if [[ "$release_state" == "true" ]]; then
               echo "Resuming existing draft release $tag"
             else
-              echo "Release $tag is already public; verifying it without replacing assets"
-              exit 0
+              # A public release page created outside CI has no assets yet; skipping
+              # the upload guarantees the verify step below fails. Upload into it
+              # instead. A release that already carries assets stays untouched —
+              # never clobber a hand-assembled release.
+              existing_assets="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')"
+              if [[ "$existing_assets" != "0" ]]; then
+                echo "Release $tag is already public with $existing_assets asset(s); verifying it without replacing assets"
+                exit 0
+              fi
+              echo "Release $tag is public but has no assets; uploading into it"
             fi
           else
             create_args=(
