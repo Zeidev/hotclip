@@ -169,6 +169,51 @@ const PRINCIPLES: Record<AppLang, string[]> = {
   ],
 };
 
+/**
+ * 必需成分:每条标题都要同时有锚点与转折。只有机制清单时,模型容易挑一条机制
+ * 却写成中性陈述——这里把「缺哪一半」直接点破(清单 vs 空话)。
+ */
+const REQUIRED_PARTS: Record<AppLang, string> = {
+  zh: "每条标题必须同时含两种成分:①锚点——片内的具体数字、专名或逐字引用,缺了就不可能有说服力;②转折——一个反差、代价或提问,让读者想补上那个空。只有锚点没有转折是清单,只有转折没有锚点是空话。",
+  tr: "Her başlıkta iki unsur birden olmalı: ①çapa — klipten somut bir sayı, özel isim ya da birebir alıntı; olmadan inandırıcı olmaz. ②dönüş — bir karşıtlık, bedel ya da soru, izleyici o boşluğu kapatmak istesin. Çapa var dönüş yok ise liste olur; dönüş var çapa yok ise laf kalabalığı.",
+  en: "Every title must carry two parts at once: (1) an anchor — a concrete number, proper name or verbatim quote from the clip, without which it cannot convince; (2) a turn — a contrast, a cost or a question that leaves a hole the reader wants closed. Anchor without turn is a list; turn without anchor is hot air.",
+};
+
+/**
+ * 禁止形状:比原则更硬——写出来就自毁的几种句形。本地质检给的
+ * topic-label / no-anchor / flat-close 判定,查的就是这几行说的东西。
+ */
+const BANNED_SHAPES: Record<AppLang, string[]> = {
+  zh: [
+    "话题标签式:「XX 是什么」「XX 那些事」「XX 的几点想法」——读者一看就知道是科普条目,不是有人非说不可的话。",
+    "模板问句:「XX 有用吗」「XX 怎么选」这类谁都能问、答案又不在片里的问题。",
+    "两句中性陈述并排:「今天去了 A,也去了 B」——没有转折、代价或反差。",
+    "过程描述收尾:以「我在做 X」「X 会发生」这类平铺收尾,读完没有要补上的空。",
+    "无锚点:片里有具体数字、名字、时间,标题却一个都不写。",
+  ],
+  tr: [
+    "Konu etiketi: \"X nedir\", \"X hakkında\", \"X ile ilgili birkaç şey\" — izleyici bunun bir ansiklopedi maddesi olduğunu anlar, birinin söylemek zorunda olduğu bir söz değil.",
+    "Kalıp soru: \"X işe yarar mı\", \"X nasıl seçilir\" gibi herkesin sorabileceği, cevabı klipte olmayan sorular.",
+    "Yan yana iki nötr cümle: \"Bugün A'ya gittim, B'ye de uğradım\" — dönüş, bedel ya da karşıtlık yok.",
+    "Süreç tarifi kapanışı: \"X yapıyorum\", \"X oluyor\" diye düz bitirmek — okurken kapatılacak bir boşluk kalmıyor.",
+    "Çapasız başlık: klipte somut sayı, isim, zaman var ama başlıkta hiçbiri geçmiyor.",
+  ],
+  en: [
+    "Topic label: \"What X is\", \"A few thoughts on X\" — the reader sees an encyclopedia entry, not a line someone had to say.",
+    "Template question: \"Does X work\", \"How do you pick X\" — anyone could ask it and the clip does not answer it.",
+    "Two neutral statements in a row: \"I went to A today, and also to B\" — no turn, no cost, no contrast.",
+    "Process description ending: trailing off with \"I am doing X\" or \"X happens\" leaves nothing to close.",
+    "No anchor: the clip has a concrete number, name or time and the title uses none of them.",
+  ],
+};
+
+/** 自检一行:交答案前的最后一道自我审稿。 */
+const SELF_CHECK: Record<AppLang, string> = {
+  zh: "先想三个不同机制的标题,挑最强的那条交上去;把你写的那条念一遍——听起来像新闻标题或目录条目,就重写。",
+  tr: "Önce üç ayrı yolla üç başlık kur, en güçlüsünü ver; seçtiğini sesli oku — haber başlığı ya da içindekiler maddesi gibi geliyorsa yeniden yaz.",
+  en: "Draft three titles by three different routes and submit the strongest; read yours aloud — if it sounds like a news headline or a table of contents, rewrite it.",
+};
+
 /** 禁令一行(平台风险与低级失分)。 */
 const BANS: Record<AppLang, string> = {
   zh: "禁止:emoji 堆、标题里塞话题标签(话题有单独字段)、以问候语开头;不写疗效/收益/保证类词与「最后一天」这类虚假紧迫感。",
@@ -187,6 +232,20 @@ const SECTION_HEADER: Record<AppLang, string> = {
   zh: "写法(五选一,每个标题只走一条):",
   tr: "Yazma yolları (beşinden birini seç; her başlık tek yol izler):",
   en: "Writing routes (pick one; each title follows a single route):",
+};
+
+/** 禁止句形的行标题(与上面的必需成分成对出现)。 */
+const BANNED_SHAPE_HEADER: Record<AppLang, string> = {
+  zh: "禁止的句形(命中任何一条就等于没写):",
+  tr: "Yasak şekiller (aşağıdakilerden biri varsa yazılmamış sayılır):",
+  en: "Banned shapes (any one of these means it is not written yet):",
+};
+
+/** 自检行的标签。 */
+const SELF_CHECK_HEADER: Record<AppLang, string> = {
+  zh: "【交答案前】",
+  tr: "【Teslim etmeden önce】",
+  en: "【Before you answer】",
 };
 
 function mechanicLine(lang: AppLang, m: HookMechanic, index: number): string {
@@ -208,8 +267,12 @@ function buildSection(lang: AppLang): string {
   return [
     `\n\n${HEADING[lang]}`,
     ...PRINCIPLES[lang],
+    REQUIRED_PARTS[lang],
     SECTION_HEADER[lang],
     ...HOOK_MECHANICS.map((m, i) => mechanicLine(lang, m, i)),
+    BANNED_SHAPE_HEADER[lang],
+    ...BANNED_SHAPES[lang],
+    `${SELF_CHECK_HEADER[lang]}${SELF_CHECK[lang]}`,
     BANS[lang],
     LENGTHS[lang],
   ].join("\n");
@@ -225,9 +288,9 @@ export function hookCraftSection(lang: AppLang): string {
 
 /** 写在画面上的一句悬念(teaser/标题卡):短,只讲写法要点。 */
 const ON_SCREEN: Record<AppLang, string> = {
-  zh: "【悬念句写法】只挖一个坑,答案留在片里;把片内的具体名词/数字写进句子;前三个字必须抓人,不许以「本视频」「大家好」开头;不剧透结局、不写疗效/收益/绝对化用语;许诺必须在片内兑现,兑不了就换句子。",
-  tr: "【Merak cümlesi nasıl yazılır】 Tek bir boşluk aç, cevabı klibe bırak; klipteki somut ismi/sayıyı cümleye koy; ilk üç kelime tutmalı, \"bu videoda\" ya da \"merhaba\" ile başlamasın; sonu spoiler vermesin, sağlık/kazanç/garanti ve \"en iyi\" tarzı sözler olmasın; vaat klip içinde ödenmeli, ödenmiyorsa cümle değişir.",
-  en: "【How to write the on-screen hook】 Open one gap and leave the answer to the clip; put the clip's own concrete noun/number in the line; the first three words must land, never open with \"in this video\" or a greeting; no spoiler, no health/earnings/absolute wording; the promise must be paid inside the clip or the line changes.",
+  zh: "【悬念句写法】只挖一个坑,答案留在片里;句子里必须有一个片内的锚点(具体数字/专名/逐字引用)加一个转折(反差/代价/提问);不许写成话题标签、模板问句(「XX 有用吗」)或两句中性陈述;前三个字必须抓人,不许以「本视频」「大家好」开头;不剧透结局、不写疗效/收益/绝对化用语;许诺必须在片内兑现,兑不了就换句子。",
+  tr: "【Merak cümlesi nasıl yazılır】 Tek bir boşluk aç, cevabı klibe bırak; cümlede klipten bir çapa (somut sayı/özel isim/birebir alıntı) ve bir dönüş (karşıtlık/bedel/soru) bulunsun; konu etiketi, kalıp soru (\"X işe yarar mı\") ya da yan yana iki nötr cümle olmasın; ilk üç kelime tutmalı, \"bu videoda\" ya da \"merhaba\" ile başlamasın; sonu spoiler vermesin, sağlık/kazanç/garanti ve \"en iyi\" tarzı sözler olmasın; vaat klip içinde ödenmeli, ödenmiyorsa cümle değişir.",
+  en: "【How to write the on-screen hook】 Open one gap and leave the answer to the clip; the line needs an anchor from the clip (a concrete number, proper name or verbatim quote) plus a turn (contrast, cost or question); never a topic label, a template question (\"does X work\") or two neutral statements in a row; the first three words must land, never open with \"in this video\" or a greeting; no spoiler, no health/earnings/absolute wording; the promise must be paid inside the clip or the line changes.",
 };
 
 /**

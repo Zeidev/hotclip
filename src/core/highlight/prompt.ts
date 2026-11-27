@@ -16,6 +16,7 @@ import { reviewMemorySection, type ReviewRecord } from "../review-memory";
 import { performanceMemorySection, type PerformanceEntry } from "../performance-memory";
 import { genreSection } from "../genre";
 import { hookCraftSection, onScreenHookRules } from "../hook-craft";
+import { checkHookQuality, needsHookRepair, needsTitleRepair } from "../hook-quality";
 import { clipDurationSec, isStitched, type ClipPiece } from "../../shared/pieces";
 import { CLIP_LENGTH_RANGES, DEFAULT_MAX_CLIPS } from "../../shared/detection-options";
 export { CLIP_LENGTH_RANGES } from "../../shared/detection-options";
@@ -60,6 +61,7 @@ export const HIGHLIGHT_SYSTEM_PROMPT_ZH = `你是一位顶级短视频切片操�
 寒暄、自我介绍、"接下来我们看下一个"、慢热铺垫——一律不能当片段开头。
 开头抛出的悬念、问题或承诺,必须在片段里给出答案:只挖坑不填坑的片段,观众划走,系统也按完播排序给分。宁可把兑现答案的那一句一起框进来。
 如果全片最炸的那一句在片段中段(不是第一句),把它逐字抄进 coldOpenQuote:系统会把它剪成片头小预告,再切回完整正片。开头第一句已经承担钩子时就留空字符串。
+开场第一句若是口头填充语起句("嗯""然后""那个""其实")或者半截话,就把片段起点挪到下一句完整的话上(让那句成为片段第一句);口头语不要留在开场句里。
 
 【长度】
 时长 8~40 秒(对应逐句稿里约 2~8 句)。
@@ -133,6 +135,7 @@ A clip's opening sentence must carry the hook. Patterns that stop the scroll:
 Greetings, self-introductions, "next up let's look at…", slow build-ups — never open a clip on these.
 Whatever the opening promises — a mystery, a question, a claim — must be answered inside the clip: viewers swipe on an unfilled promise, and platforms rank on watch-through. Frame the line that pays it off into the clip.
 If the single strongest line sits later in the clip rather than first, copy it verbatim into coldOpenQuote: the system cuts it into a short pre-roll before the full clip. Leave it an empty string when the opening sentence already carries the hook.
+If the opening line starts on a filler interjection ("um", "well", "so") or is a fragment, move the clip's start to the next complete sentence so that one becomes the first line; never leave the filler in the hook.
 
 【Length】
 Length 8–40 seconds (roughly 2–8 transcript sentences).
@@ -206,6 +209,7 @@ Kesitin açılış cümlesi kancayı kendi taşımalı. Türkçede parmağı dur
 Selamlama, kendini tanıtma, "şimdi sıradaki konuya geçelim", yavaş giriş — kesitin açılışı bunlar asla olmaz.
 Açılışın kurduğu söz — merak, soru ya da iddia — kesitin içinde cevaplanmalı: sözünü tutmayan kesitte izleyici kaydırıp gider, platform da sonuna kadar izlenmeye göre sıralıyor. Cevabı veren cümleyi de kesite al.
 En çarpıcı cümle kesitin ilk cümlesi değil de ortasında/ilerisindeyse onu birebir coldOpenQuote alanına yaz: sistem onu tam kesitten önce kısa bir ön açılış olarak keser. Açılış cümlesi kancayı zaten taşıyorsa boş dize bırak.
+Açılış cümlesi dolgu sözle başlıyorsa ("kardeşim", "vallahi", "bak", "şimdi", "yani") ya da yarım kalmışsa, kesitin başlangıcını bir sonraki tam cümlenin başına kaydır; dolgu söz kancada kalmaz.
 
 【Süre】
 Süre 8–40 saniye (kabaca 2–8 cümle).
@@ -920,6 +924,7 @@ const REVIEW_SHAPE = `{
       "loop": true,
       "teaser": "...",
       "titleFix": "...",
+      "hookFix": "...",
       "note": "..."
     }
   ]
@@ -931,6 +936,8 @@ interface ReviewableClip {
   startSec: number;
   endSec: number;
   text: string;
+  /** 片段第一句的逐字原文(本地质检要看它是不是口头语碎片)。 */
+  hook?: string;
   /** 多片段拼接的段清单;有它时时长要按各段之和报,不是跨度。 */
   pieces?: ClipPiece[];
 }
@@ -954,6 +961,34 @@ export function buildReviewPrompt(
   const lang = promptLanguage(transcript, langOverride);
   const zh = lang === "zh";
   const tr = lang === "tr";
+  // 本地质检(stage-1 强度判据)先跑一遍:评审得看见「这条标题被判为话题条目」
+  // 或者「开场句是口头语碎片」,titleFix/hookFix 才有靶子。整批一起算,顺带
+  // 拿到 duplicate / angle-repeat(publish 那条路另有自己的一次）。
+  const titleCodesById = new Map(
+    checkHookQuality(
+      clips.map((c) => ({ id: c.id, title: c.title })),
+      { lang, surface: "stage1" }
+    ).map((f) => [f.id, f.codes] as const)
+  );
+  const hookCodesById = new Map(
+    checkHookQuality(
+      clips.map((c) => ({ id: c.id, title: c.title, hook: c.hook ?? "" })),
+      { lang, surface: "stage1Hook" }
+    ).map((f) => [f.id, f.codes] as const)
+  );
+  const gateNote = (id: number): string => {
+    const weak: string[] = [];
+    const titleCodes = titleCodesById.get(id);
+    if (titleCodes && needsTitleRepair(titleCodes)) {
+      weak.push(`${zh ? "标题" : tr ? "başlık" : "title"}=${titleCodes.join(",")}`);
+    }
+    const hookCodes = hookCodesById.get(id);
+    if (hookCodes && needsHookRepair(hookCodes)) {
+      weak.push(`${zh ? "开场句" : tr ? "açılış" : "opening"}=${hookCodes.join(",")}`);
+    }
+    if (weak.length === 0) return "";
+    return `\n${zh ? "本地质检" : tr ? "Yerel kapı" : "Local gate"}: ${weak.join("; ")}`;
+  };
   const blocks = clips
     .map((c) => {
       const ctx = contextAround(transcript, c.startSec, c.endSec);
@@ -966,19 +1001,19 @@ export function buildReviewPrompt(
             : ` (${c.pieces!.length}-part stitch)`
         : "";
       if (zh) {
-        return `【候选 ${c.id}】《${c.title}》 时长${dur}秒${stitched}\n前文:${ctx.before || "(无)"}\n片段:${c.text}\n后文:${ctx.after || "(无)"}`;
+        return `【候选 ${c.id}】《${c.title}》 时长${dur}秒${stitched}\n前文:${ctx.before || "(无)"}\n片段:${c.text}\n后文:${ctx.after || "(无)"}${gateNote(c.id)}`;
       }
       if (tr) {
-        return `【Aday ${c.id}】"${c.title}" ${dur} sn${stitched}\nÖncesi: ${ctx.before || "(yok)"}\nKesit: ${c.text}\nSonrası: ${ctx.after || "(yok)"}`;
+        return `【Aday ${c.id}】"${c.title}" ${dur} sn${stitched}\nÖncesi: ${ctx.before || "(yok)"}\nKesit: ${c.text}\nSonrası: ${ctx.after || "(yok)"}${gateNote(c.id)}`;
       }
-      return `【Candidate ${c.id}】"${c.title}" ${dur}s${stitched}\nBefore: ${ctx.before || "(none)"}\nClip: ${c.text}\nAfter: ${ctx.after || "(none)"}`;
+      return `【Candidate ${c.id}】"${c.title}" ${dur}s${stitched}\nBefore: ${ctx.before || "(none)"}\nClip: ${c.text}\nAfter: ${ctx.after || "(none)"}${gateNote(c.id)}`;
     })
     .join("\n\n");
   if (zh) {
-    return `逐条盲评下面的候选片段。hook/flow/value/trend 四维各 0-100 打分(横向比较)+ 各一句话理由;payoff=开头许诺的东西在片内兑现了没有(0-100,payoffNote 里写清是哪一句兑现的、没有就写「没有兑现」);teaser=≤15字悬念句(勾人不剧透,逐句稿同款语言);titleFix=候选现在的标题若是套话开头/超长/带话题标签或风险词,就写一个改好的标题(≤20字,按写法要点),标题本来就够好就留空字符串;loop=≤30秒片段能不能无缝循环重看(true/false);verdict=质量门三档(publish/review/drop,判法见系统要求);keep 与 verdict 对应(publish=true,其余 false);note=一句话总评(review/drop 必须说清具体硬伤)。\n\n${blocks}\n\n【输出格式】严格输出 JSON,不要任何多余文字:\n${REVIEW_SHAPE}`;
+    return `逐条盲评下面的候选片段。hook/flow/value/trend 四维各 0-100 打分(横向比较)+ 各一句话理由;payoff=开头许诺的东西在片内兑现了没有(0-100,payoffNote 里写清是哪一句兑现的、没有就写「没有兑现」);teaser=≤15字悬念句(勾人不剧透,逐句稿同款语言);titleFix=候选标题若被「本地质检」点名(或者套话开头/超长/带话题标签/风险词),就按写法要点写一个更好的标题(≤20字,必须含一个片内锚点,不许写成话题条目或中性陈述),标题已经很好就留空字符串;hookFix=候选开场句若被点名(口头填充语起句、半截话),从片段文本里逐字挑一句更适合当开场钩子的句子写进来(必须与片段文本一字不差,不许改写),没有更好的就留空字符串;loop=≤30秒片段能不能无缝循环重看(true/false);verdict=质量门三档(publish/review/drop,判法见系统要求);keep 与 verdict 对应(publish=true,其余 false);note=一句话总评(review/drop 必须说清具体硬伤)。\n\n${blocks}\n\n【输出格式】严格输出 JSON,不要任何多余文字:\n${REVIEW_SHAPE}`;
   }
   if (tr) {
-    return `Aşağıdaki adayları tek tek kör değerlendirmeden geçir. hook/flow/value/trend dört boyutun her birine 0-100 puan ver (birbirine göre kıyaslayarak) ve her boyuta tek cümle gerekçe yaz; payoff = açılışın kurduğu söz kesit içinde ödendi mi (0-100; payoffNote içinde hangi cümlenin ödediğini yaz, ödeyen yoksa "ödeyen yok" yaz); teaser = ≤6 kelimelik merak cümlesi (merak uyandırır, spoiler vermez, dökümün diliyle); titleFix = adayın şimdiki başlığı kalıp sözle başlıyorsa, çok uzunsa ya da hashtag/risk sözcüğü içeriyorsa düzeltilmiş başlığı yaz (≤8 kelime, yazma kurallarına göre), başlık zaten iyiyse boş bırak; loop = ≤30 sn kesit dikişsiz tekrar izlenebiliyor mu (true/false); verdict = kalite kapısı üç kademesi (publish/review/drop, kurallar sistem mesajında); keep, verdict ile uyumlu olsun (sadece publish için true); note = tek cümlelik genel değerlendirme (review/drop için kusuru mutlaka söyle).\n\n${blocks}\n\n【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:\n${REVIEW_SHAPE}`;
+    return `Aşağıdaki adayları tek tek kör değerlendirmeden geçir. hook/flow/value/trend dört boyutun her birine 0-100 puan ver (birbirine göre kıyaslayarak) ve her boyuta tek cümle gerekçe yaz; payoff = açılışın kurduğu söz kesit içinde ödendi mi (0-100; payoffNote içinde hangi cümlenin ödediğini yaz, ödeyen yoksa "ödeyen yok" yaz); teaser = ≤6 kelimelik merak cümlesi (merak uyandırır, spoiler vermez, dökümün diliyle); titleFix = adayın başlığı "Yerel kapı"da işaretlendiyse (ya da kalıp sözle başlıyor, çok uzun, hashtag/risk sözcüğü içeriyorsa) yazma kurallarına göre daha iyi bir başlık yaz (≤8 kelime, klipten somut bir çapa içermeli; konu etiketi ya da nötr cümle olmasın), başlık zaten iyiyse boş bırak; hookFix = açılış cümlesi işaretlendiyse (dolgu sözcükle başlıyor / yarım kalmış) kesit metninden birebir, kanca olarak daha güçlü bir cümle yaz (kesit metniyle harfi harfine aynı olmalı, yeniden yazma), daha iyisi yoksa boş bırak; loop = ≤30 sn kesit dikişsiz tekrar izlenebiliyor mu (true/false); verdict = kalite kapısı üç kademesi (publish/review/drop, kurallar sistem mesajında); keep, verdict ile uyumlu olsun (sadece publish için true); note = tek cümlelik genel değerlendirme (review/drop için kusuru mutlaka söyle).\n\n${blocks}\n\n【Çıktı biçimi】SADECE JSON döndür, başka hiçbir metin ekleme:\n${REVIEW_SHAPE}`;
   }
-  return `Blind-review each candidate below. Score hook/flow/value/trend 0-100 each (relative) with a one-line reason per dimension; payoff = was the opening's promise delivered inside the clip (0-100; payoffNote names the line that pays it off, or says nothing does); teaser = a ≤8-word suspense line (intriguing, no spoilers, transcript language); titleFix = if the candidate's current title opens with filler, runs long, or carries a hashtag/risk term, write a corrected title (≤12 words, per the writing rules), and leave it empty when the title is already good; loop = can a ≤30s clip be rewatched seamlessly (true/false); verdict = the three-tier gate (publish/review/drop, per the system rules); keep mirrors verdict (true only for publish); note = one-line overall verdict (must name the flaw for review/drop).\n\n${blocks}\n\n【Output format】STRICT JSON only:\n${REVIEW_SHAPE}`;
+  return `Blind-review each candidate below. Score hook/flow/value/trend 0-100 each (relative) with a one-line reason per dimension; payoff = was the opening's promise delivered inside the clip (0-100; payoffNote names the line that pays it off, or says nothing does); teaser = a ≤8-word suspense line (intriguing, no spoilers, transcript language); titleFix = if the local gate flagged the title (or the title opens with filler, runs long, or carries a hashtag/risk term), write a stronger title per the writing rules (≤12 words, carrying one concrete anchor from the clip, never a topic label or a neutral statement), and leave it empty when the title is already good; hookFix = if the opening line was flagged (filler opener, fragment), pick the verbatim line from the clip text that works better as the opening hook (it must match the clip text word for word, never rewrite), and leave it empty when no line is better; loop = can a ≤30s clip be rewatched seamlessly (true/false); verdict = the three-tier gate (publish/review/drop, per the system rules); keep mirrors verdict (true only for publish); note = one-line overall verdict (must name the flaw for review/drop).\n\n${blocks}\n\n【Output format】STRICT JSON only:\n${REVIEW_SHAPE}`;
 }

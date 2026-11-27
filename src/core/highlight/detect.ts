@@ -32,7 +32,14 @@ import { resolveSelection, type RawSelection, type RawPart } from "./match";
 import { prefilterTranscript } from "./prefilter";
 import { detectClipCommands } from "./commands";
 import { applyRuleGate, type GateTier } from "./gate";
-import { checkHookQuality } from "../hook-quality";
+import {
+  checkHookQuality,
+  hardCodes,
+  needsHookRepair,
+  quoteKey,
+  weaknessCount,
+  type HookWarnCode,
+} from "../hook-quality";
 import { utilityDensity, utilityBoost, UTILITY_SAVE_WORTHY } from "../../shared/utility-density";
 import { clipDurationSec, MAX_PIECES, type ClipPiece } from "../../shared/pieces";
 import { snapSelectionToCues } from "../../shared/boundary";
@@ -442,8 +449,13 @@ export interface ReviewVerdict {
   payoffNote?: string;
   /** 无缝循环(只对 ≤30 秒片段有意义);缺省=模型没判。 */
   loop?: boolean;
-  /** 标题返工:评审顺手改掉套话/超长的候选标题;标题够好时留空。 */
+  /** 标题返工:评审顺手改掉套话/超长/条目式的候选标题;标题够好时留空。 */
   titleFix?: string;
+  /**
+   * 开场句返工:开场句是口头语碎片时,评审从片段文本里逐字挑出的更硬的一句。
+   * 采纳前会校验它确实逐字存在于片段文本里(detect.ts applyReviews)。
+   */
+  hookFix?: string;
 }
 
 /** Hook rules the scroll; trend is the softest signal. */
@@ -524,6 +536,8 @@ export function parseReviews(content: string): ReviewVerdict[] {
       loop: typeof v.loop === "boolean" ? v.loop : undefined,
       // 标题返工:上限与 stage-1 标题同量级,超长直接丢(不给它机会写长)
       titleFix: String(v.titleFix ?? "").trim().slice(0, 40) || undefined,
+      // 开场句返工:引文可能比标题长(一句话),上限放宽;是否真存在于片段见 applyReviews
+      hookFix: String(v.hookFix ?? "").trim().slice(0, 200) || undefined,
     });
   }
   return out;
@@ -556,17 +570,43 @@ export function applyReviews(
       r.loop === true && clipDurationSec(c) <= LOOP_MAX_SEC
         ? Math.min(100, (r.score || c.score) + LOOP_BOOST)
         : r.score || c.score;
-    // 标题返工:评审顺手改的标题,只有过了本地质检(不套话、不超长、不带标签
-    // 与风险词)才采纳。评审这一路是白捡的机会——stage-1 的标题没有第二次
-    // 生成(再调一次 LLM 只为标题不值),但评审本来就在读这条片。
+    // 标题返工:评审顺手改的标题,采纳条件 = 不犯硬伤,并且真的更好(硬伤没了,
+    // 或者强度弱点严格变少)。评审这一路是白捡的机会——stage-1 的标题没有第二
+    // 次生成(再调一次 LLM 只为标题不值),但评审本来就在读这条片。
+    const codesOf = (text: string): HookWarnCode[] =>
+      checkHookQuality([{ id: c.id, title: text }], { lang, surface: "stage1" })[0]?.codes ?? [];
+    const hookCodesOf = (text: string): HookWarnCode[] =>
+      checkHookQuality([{ id: c.id, title: c.title, hook: text }], { lang, surface: "stage1Hook" })[0]?.codes ?? [];
     const fix = r.titleFix?.trim();
+    const oldTitleCodes = codesOf(c.title);
+    const newTitleCodes = fix ? codesOf(fix) : [];
     const titleFix =
-      fix && fix !== c.title && checkHookQuality([{ id: c.id, title: fix }], { lang, surface: "stage1" }).length === 0
+      fix &&
+      fix !== c.title &&
+      hardCodes(newTitleCodes).length === 0 &&
+      (hardCodes(oldTitleCodes).length > 0 || weaknessCount(newTitleCodes) < weaknessCount(oldTitleCodes))
         ? fix
+        : undefined;
+    // 开场句返工:必须是片段文本里逐字存在的一句话(只容标点差异),而且比现在
+    // 这句在开场句判据上真的少一个弱点。换掉之后 cold-open 的兜底句也变成它
+    // (coldopen.ts coldOpenQuoteText),片头预告顺手一起修好。
+    const hookFixRaw = r.hookFix?.trim();
+    const oldHookCodes = hookCodesOf(c.hook ?? "");
+    const newHookCodes = hookFixRaw ? hookCodesOf(hookFixRaw) : [];
+    const hookQuoteKey = quoteKey(hookFixRaw ?? "", lang);
+    const hookFix =
+      hookFixRaw &&
+      hookFixRaw !== c.hook &&
+      needsHookRepair(oldHookCodes) &&
+      newHookCodes.length < oldHookCodes.length &&
+      hookQuoteKey.length > 0 &&
+      quoteKey(c.text, lang).includes(hookQuoteKey)
+        ? hookFixRaw
         : undefined;
     return {
       ...c,
       ...(titleFix ? { title: titleFix } : {}),
+      ...(hookFix ? { hook: hookFix } : {}),
       score,
       recommended: gate === "publish",
       reviewNote: r.note,

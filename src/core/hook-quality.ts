@@ -12,6 +12,14 @@
  *  - angle-repeat:整批反复用同一个钩子角度(同上);
  *  - risk-word:复用 content-lint 的平台风险词表,不另写一份黑名单。
  *
+ * 第二组是**强度**判据(stage-1 标题 / stage-1 开场句专用,v0.38):
+ *  - no-anchor / topic-label / flat-close:标题写成了话题条目或中性陈述;
+ *  - hook-filler-open / hook-fragment / hook-interjection:开场句是口头语碎片
+ *    ("Vallahi billahi."、"bi kardeşiniz var")。
+ * 强度判据只当「值不值得让模型返工」的信号,不当否决票——误伤一条好标题比漏掉
+ * 三条坏标题更贵。所以 needsTitleRepair/needsHookRepair 用它,采纳与否另有一道
+ * 更严的关(detect.ts:新文本必须真的少一个弱点)。
+ *
  * 刻意不做的事:不在这里判定「承诺是否兑现」——missingHookPayoffs(qa.ts)要
  * 全片文本,而发布链路手上只有 300 字节选(publish.ts),拿它判会造出假的
  * 「没兑现」;也不做 too-short/filler-only(一个词的合法钩子会被误伤)。
@@ -24,7 +32,7 @@ import { lintText } from "./content-lint";
 import type { HookAngleId } from "./copy-templates";
 
 /** 质检的出口:不同出口的字段上限不同,对应提示词里各自的说明。 */
-export type HookSurface = "stage1" | "teaser" | "publish" | "variantTitle" | "variantTeaser";
+export type HookSurface = "stage1" | "stage1Hook" | "teaser" | "publish" | "variantTitle" | "variantTeaser";
 
 export type HookWarnCode =
   | "empty"
@@ -33,12 +41,56 @@ export type HookWarnCode =
   | "hashtag-in-title"
   | "duplicate"
   | "angle-repeat"
-  | "risk-word";
+  | "risk-word"
+  | "no-anchor"
+  | "topic-label"
+  | "flat-close"
+  | "hook-filler-open"
+  | "hook-fragment"
+  | "hook-interjection";
+
+/** 强度判据(第三组):只出现在 stage1 / stage1Hook,决定要不要返工。 */
+export const STRENGTH_CODES: readonly HookWarnCode[] = [
+  "no-anchor",
+  "topic-label",
+  "flat-close",
+  "hook-filler-open",
+  "hook-fragment",
+  "hook-interjection",
+];
+
+/** 开场句(引文)专用的强度码。 */
+const HOOK_CODES: readonly HookWarnCode[] = ["hook-filler-open", "hook-fragment", "hook-interjection"];
+
+/** 硬伤:命中就是不合格,与强度无关。 */
+export function hardCodes(codes: readonly HookWarnCode[]): HookWarnCode[] {
+  return codes.filter((c) => !STRENGTH_CODES.includes(c));
+}
+
+/** 强度码数量(采纳返工时要求它严格下降)。 */
+export function weaknessCount(codes: readonly HookWarnCode[]): number {
+  return codes.filter((c) => STRENGTH_CODES.includes(c)).length;
+}
+
+/**
+ * 标题值不值得返工:有硬伤,或者「没有锚点」叠上一条结构性弱点。
+ * 单独一个 no-anchor 不返工——片里确实没有数字/专名的片段本来就存在,
+ * 为它返工只会把好标题改坏。
+ */
+export function needsTitleRepair(codes: readonly HookWarnCode[]): boolean {
+  if (hardCodes(codes).length > 0) return true;
+  return codes.includes("no-anchor") && (codes.includes("topic-label") || codes.includes("flat-close"));
+}
+
+/** 开场句值不值得返工:任何开场句弱点都值得在评审那一趟顺手换一句更好的。 */
+export function needsHookRepair(codes: readonly HookWarnCode[]): boolean {
+  return codes.some((c) => HOOK_CODES.includes(c));
+}
 
 export interface HookFlag {
   id: number;
-  /** 命中的字段(标题/悬念句),告警文案里点名用。 */
-  field: "title" | "teaser";
+  /** 命中的字段(标题/悬念句/开场句),告警文案里点名用。 */
+  field: "title" | "teaser" | "hook";
   codes: HookWarnCode[];
   /** 具体到数字/对比对象的细节(进返工提示词给模型看)。 */
   detail?: string;
@@ -51,6 +103,8 @@ export interface HookCandidate {
   description?: string;
   /** 悬念句出口(teaser/variantTeaser)读这个字段。 */
   teaser?: string;
+  /** 开场句出口(stage1Hook)读这个字段:片段第一句的逐字原文。 */
+  hook?: string;
   angle?: HookAngleId;
 }
 
@@ -68,6 +122,13 @@ const CAPS: Record<HookSurface, Record<AppLang, Cap>> = {
     zh: { unit: "chars", max: 20 },
     tr: { unit: "words", max: 8 },
     en: { unit: "words", max: 12 },
+  },
+  // 开场句是**引文**,不是模型写的:上限只用来挡异常(整段被抄进 hook),
+  // 正常一句话永远碰不到,免得本该逐字复制的字段被长度判据误报。
+  stage1Hook: {
+    zh: { unit: "chars", max: 120 },
+    tr: { unit: "words", max: 40 },
+    en: { unit: "words", max: 40 },
   },
   teaser: {
     zh: { unit: "chars", max: 15 },
@@ -150,6 +211,107 @@ const GENERIC_OPENERS: Record<AppLang, string[]> = {
   ],
 };
 
+/**
+ * 开场句的口头填充词:说话人起句时的口头语。第一句从这些词开始,观众听到的
+ * 头一秒就是"还没开始"——而这些片段恰恰要靠第一句留人。
+ * 单独一个 "bugün" 不列(「Bugün 40 derece」是好开场),列的是纯填充。
+ * "şimdi" 算填充:口语里起句的 "şimdi" 十次有九次是"现在我来说"而不是内容
+ * (「Şimdi sektördeki birçok insan PVP」就是这么起头的);真当内容用的
+ * "Şimdi 40 derece" 极少,认错也只是让评审从片里另挑一句,代价低。
+ */
+const HOOK_FILLER_WORDS: Record<AppLang, string[]> = {
+  zh: ["嗯", "呃", "那个", "然后", "其实", "就是", "好吧", "这一期", "咱们", "咱"],
+  tr: [
+    "kardeşim", "kardeş", "ya", "bak", "bakın", "vallahi", "billahi", "efendim", "yani", "işte",
+    "şey", "tamam", "arkadaşlar", "abi", "abicim", "be", "hocam", "ee", "eee", "hmm", "diyorum",
+    "hop", "hadi", "şimdi",
+  ],
+  en: [
+    "um", "uh", "well", "so", "okay", "ok", "yeah", "like", "you know", "listen", "guys", "man",
+    "dude", "actually", "basically", "alright",
+  ],
+};
+
+/** 悬空连接词:句子说到一半停在这些词上,下一句被切掉了。 */
+const HOOK_TRAIL_CONNECTORS: Record<AppLang, string[]> = {
+  zh: [],
+  tr: ["ve", "ama", "ki", "çünkü", "ya", "veya", "de", "da"],
+  en: ["and", "but", "because", "so", "or", "that", "which", "if"],
+};
+
+/** 标题锚点词:数字之外还能当锚点的量与时间(土耳其语标题常写词不写数字)。 */
+const ANCHOR_WORDS: Record<AppLang, string[]> = {
+  zh: [],
+  tr: [
+    "milyon", "milyar", "bin", "yüzde", "sene", "yıl", "ay", "hafta", "gün", "saat", "dakika",
+    "saniye", "yaş", "kilo", "ton", "lira", "dolar", "euro", "kat", "kişi", "kez", "sefer",
+  ],
+  en: [
+    "million", "billion", "thousand", "percent", "year", "years", "month", "months", "week",
+    "weeks", "day", "days", "hour", "hours", "minute", "minutes", "second", "seconds", "kilos",
+    "dollars", "euros", "times", "people",
+  ],
+};
+
+/** 话题条目/模板问句的写法(命中就说明这是条目,不是有人非说不可的话)。 */
+const TOPIC_LABEL_RE: Record<AppLang, RegExp> = {
+  zh: /(是什么|那些事|那些事儿|盘点|科普|介绍|怎么回事|小知识|讲讲|聊聊|关于)/,
+  tr: /\b(nedir|ne demek|neden olur|hakkında|ile ilgili|konusu|rehberi|nelerdir|nasıl yapılır|nasıl olur|ne işe yarar)\b/i,
+  en: /\b(what is|all about|explained|a guide to|guide to|tips for|thoughts on|everything about)\b/i,
+};
+
+/** 模板问句的收尾(与锚点联合判定:有锚点的问句是好标题)。 */
+const TEMPLATE_QUESTION_RE: Record<AppLang, RegExp> = {
+  zh: /[吗呢]\s*[?？]*$/,
+  tr: /\b(mı|mi|mu|mü|mıdır|midir)\s*[?？]*$/i,
+  en: /\?$/,
+};
+
+/** 中性过程描述收尾("…yapıyorum/oluyor"),读完没有要补上的空。 */
+const FLAT_CLOSE_RE: Record<AppLang, RegExp> = {
+  zh: /(我在|正在|说一下|聊一下)\s*[。.!！]*$/,
+  tr: /(yor|makta|mekte)\s*[.!]*$/i,
+  en: /\b(i am|i'm|it is|it's|we are|we're)\s+\w+ing\s*[.!]*$/i,
+};
+
+/** 标题里有没有锚点:数字、引号里的原话、数量/时间词、或专名(全大写也算)。 */
+function hasAnchor(text: string, lang: AppLang): boolean {
+  if (/\d/.test(text)) return true;
+  if (/["“”'‘’«»]/.test(text)) return true;
+  const folded = fold(text, lang).replace(/[\p{P}\p{S}]+/gu, " ").split(/\s+/).filter(Boolean);
+  if (folded.some((t) => ANCHOR_WORDS[lang].includes(t))) return true;
+  if (lang === "zh") return false;
+  // 专名:首词之后的、以大写字母开头的词,或者整词全大写(PVP)
+  const raw = text.replace(/[\p{P}\p{S}]+/gu, " ").split(/\s+/).filter(Boolean);
+  return raw.slice(1).some((t) => /^[A-ZÇĞİÖŞÜ][\p{L}]+$/u.test(t) || (/^[A-ZÇĞİÖŞÜ]{2,}$/u.test(t) && raw.indexOf(t) > 0));
+}
+
+/** 开场句是不是"还没开始":填充词起句、碎片、纯口头语。 */
+function hookOpeningCodes(text: string, lang: AppLang): { codes: HookWarnCode[]; notes: string[] } {
+  const codes: HookWarnCode[] = [];
+  const notes: string[] = [];
+  const head = fold(stripLead(text), lang);
+  if (!head) return { codes, notes };
+  const tokens = head.replace(/[\p{P}\p{S}]+/gu, " ").split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { codes, notes };
+
+  const filler = HOOK_FILLER_WORDS[lang];
+  if (filler.includes(tokens[0])) {
+    codes.push("hook-filler-open");
+    notes.push(`"${tokens[0]}"`);
+  }
+  // 纯口头语:每个词都是填充词
+  if (tokens.length <= 4 && tokens.every((t) => filler.includes(t))) codes.push("hook-interjection");
+
+  const minUnits = lang === "zh" ? 6 : 4;
+  const lead = stripLead(text);
+  if (lang !== "zh" && /^[a-zçğıöşü]/.test(lead)) codes.push("hook-fragment");
+  else if (countUnits(text, lang === "zh" ? "chars" : "words") < minUnits) codes.push("hook-fragment");
+  else if (HOOK_TRAIL_CONNECTORS[lang].includes(tokens[tokens.length - 1])) codes.push("hook-fragment");
+
+  return { codes, notes };
+}
+
 /** 相似度判定时忽略的常见虚词(词级 Dice 用)。 */
 const STOPWORDS: Record<AppLang, Set<string>> = {
   zh: new Set<string>(),
@@ -187,6 +349,18 @@ function dupKey(text: string, lang: AppLang): string {
   return fold(text, lang).replace(/[\p{P}\p{S}\s]+/gu, "");
 }
 
+/**
+ * 引文比对键:折叠大小写、标点换成空白、空白压成一个。
+ * 用来校验评审交回的 hookFix 是不是片段里真实存在的一句话——模型可以差在
+ * 标点上,但不能自己造句子。
+ */
+export function quoteKey(text: string, lang: AppLang): string {
+  return fold(text, lang)
+    .replace(/[\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const CODE_LABEL: Record<AppLang, Record<HookWarnCode, string>> = {
   zh: {
     empty: "字段是空的",
@@ -196,6 +370,12 @@ const CODE_LABEL: Record<AppLang, Record<HookWarnCode, string>> = {
     duplicate: "与本批另一条几乎是同一句话",
     "angle-repeat": "与前面某条用了同一个钩子角度",
     "risk-word": "命中平台风险词",
+    "no-anchor": "没有任何锚点(片里的数字/专名/原话一个都没进标题)",
+    "topic-label": "写成了话题条目或模板问句",
+    "flat-close": "以中性过程描述收尾(读完没有要补上的空)",
+    "hook-filler-open": "开场句以口头语起句(第一秒等于没开始)",
+    "hook-fragment": "开场句是半截话",
+    "hook-interjection": "开场句整句都是口头语",
   },
   tr: {
     empty: "alan boş",
@@ -205,6 +385,12 @@ const CODE_LABEL: Record<AppLang, Record<HookWarnCode, string>> = {
     duplicate: "partideki başka bir başlıkla neredeyse aynı",
     "angle-repeat": "önceki bir kayıtla aynı kanca açısı",
     "risk-word": "platform risk sözcüğü var",
+    "no-anchor": "hiçbir çapa yok (klipteki sayı/isim/alıntı başlığa girmemiş)",
+    "topic-label": "konu etiketi ya da kalıp soru olmuş",
+    "flat-close": "nötr süreç tarifiyle bitiyor (kapatılacak bir boşluk kalmıyor)",
+    "hook-filler-open": "açılış cümlesi dolgu sözcükle başlıyor (ilk saniye başlamamış gibi)",
+    "hook-fragment": "açılış cümlesi yarım",
+    "hook-interjection": "açılış cümlesinin tamamı dolgu",
   },
   en: {
     empty: "the field is empty",
@@ -214,6 +400,12 @@ const CODE_LABEL: Record<AppLang, Record<HookWarnCode, string>> = {
     duplicate: "nearly the same line as another item in this batch",
     "angle-repeat": "reuses the same hook angle as an earlier item",
     "risk-word": "hits a platform risk term",
+    "no-anchor": "no anchor at all (none of the clip's numbers/names/quotes made it in)",
+    "topic-label": "reads as a topic entry or a template question",
+    "flat-close": "ends on a neutral process description (nothing left to close)",
+    "hook-filler-open": "the opening line starts on filler (second one never begins)",
+    "hook-fragment": "the opening line is a fragment",
+    "hook-interjection": "the opening line is all filler",
   },
 };
 
@@ -224,14 +416,21 @@ const CODE_LABEL: Record<AppLang, Record<HookWarnCode, string>> = {
 export function checkHookQuality(items: HookCandidate[], opts: { lang: AppLang; surface: HookSurface }): HookFlag[] {
   const { lang, surface } = opts;
   const cap = CAPS[surface];
-  const field: "title" | "teaser" = surface === "teaser" || surface === "variantTeaser" ? "teaser" : "title";
+  const field: "title" | "teaser" | "hook" =
+    surface === "teaser" || surface === "variantTeaser" ? "teaser" : surface === "stage1Hook" ? "hook" : "title";
   const unitLabel = cap[lang].unit === "chars" ? (lang === "zh" ? "字" : "char") : lang === "zh" ? "词" : "words";
+  // 强度判据只对 stage-1 的标题与开场句生效:发布文案/变体的既有行为一点不能动
+  // (publish 那条路一有 flag 就多花一次返工调用,误报会直接变成成本)。
+  const strengthOnTitle = surface === "stage1";
+  const strengthOnHook = surface === "stage1Hook";
   const seen: Array<{ id: number; key: string; set: Set<string> }> = [];
   const seenAngles = new Map<HookAngleId, number>();
   const out: HookFlag[] = [];
 
   for (const item of items) {
-    const text = ((field === "teaser" ? item.teaser : item.title) ?? "").trim();
+    const text = (
+      (field === "teaser" ? item.teaser : field === "hook" ? item.hook : item.title) ?? ""
+    ).trim();
     const codes = new Set<HookWarnCode>();
     const notes: string[] = [];
 
@@ -261,6 +460,23 @@ export function checkHookQuality(items: HookCandidate[], opts: { lang: AppLang; 
       if (risky.length > 0) {
         codes.add("risk-word");
         notes.push(risky.map((h) => `"${h.term}"`).join("/"));
+      }
+
+      // 强度判据(stage-1 专用):标题是不是写成了条目/中性陈述,开场句是不是
+      // 口头语碎片。只做返工信号——采纳与否在 detect.ts 另有关(新文本必须真的
+      // 少一个弱点),所以这里可以宽松一点,宁可多送一条去返工。
+      if (strengthOnTitle) {
+        const anchored = hasAnchor(text, lang);
+        if (!anchored) codes.add("no-anchor");
+        if (TOPIC_LABEL_RE[lang].test(text) || (TEMPLATE_QUESTION_RE[lang].test(text) && !anchored)) {
+          codes.add("topic-label");
+        }
+        if (FLAT_CLOSE_RE[lang].test(text)) codes.add("flat-close");
+      }
+      if (strengthOnHook) {
+        const opened = hookOpeningCodes(text, lang);
+        for (const c of opened.codes) codes.add(c);
+        notes.push(...opened.notes);
       }
 
       // 重复与角度:短标题不参与(误报太多)
