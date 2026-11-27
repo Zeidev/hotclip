@@ -13,7 +13,7 @@ import { resolveFfmpegPath } from "./binaries";
 const execFileAsync = promisify(execFile);
 import { cutClip, cutJumpClip, concatClips, type CutOptions } from "./cut";
 import { measurePieceColors, planPieceColorGrades } from "./color-match";
-import { detectFileOnsets } from "./beat";
+import { detectFileOnsets, repeatBeatGrid } from "./beat";
 import { planColdOpen, planFlashForward, coldOpenQuoteText, FLASH_SKIP_NEAR_START_SEC } from "./coldopen";
 import { ZOOM_PUNCH_END } from "./autozoom";
 import { computeJumpCut, BREATH_PAD_SEC } from "./gaps";
@@ -317,16 +317,26 @@ export interface ClipRenderOutcome {
 
 /**
  * Beat grid of a music bed: a bounded 60 s prefix is enough for tempo and
- * phase, and the result is cached per path so a whole batch pays once. An
- * unreadable bed simply yields no grid (cuts stay where they were).
+ * phase, and the result is cached per path so a whole batch pays once. The bed
+ * is looped into the mix, so a file shorter than the clip repeats its grid —
+ * onsets are measured against output time (see beat.ts), and a clip outrunning
+ * a one-shot grid would simply never snap past the bed's length.
  */
-const bgmBeatCache = new Map<string, number[]>();
-async function bgmBeatGrid(path: string, signal?: AbortSignal): Promise<number[] | undefined> {
-  const cached = bgmBeatCache.get(path);
-  if (cached) return cached.length > 0 ? cached : undefined;
-  const { onsets } = await detectFileOnsets(path, { maxSeconds: 60, signal }).catch(() => ({ onsets: [] as number[] }));
-  bgmBeatCache.set(path, onsets);
-  return onsets.length > 0 ? onsets : undefined;
+const bgmBeatCache = new Map<string, { onsets: number[]; analyzedSec: number }>();
+async function bgmBeatGrid(path: string, untilSec: number, signal?: AbortSignal): Promise<number[] | undefined> {
+  let entry = bgmBeatCache.get(path);
+  if (!entry) {
+    const found = await detectFileOnsets(path, { maxSeconds: 60, signal }).catch(() => ({ onsets: [] as number[], analyzedSec: 0 }));
+    entry = { onsets: found.onsets, analyzedSec: found.analyzedSec };
+    bgmBeatCache.set(path, entry);
+  }
+  if (entry.onsets.length === 0) return undefined;
+  // Decoded less than we asked for = the whole file, which is also its loop period.
+  const grid =
+    entry.analyzedSec > 0 && entry.analyzedSec < 59.9
+      ? repeatBeatGrid(entry.onsets, entry.analyzedSec, untilSec)
+      : entry.onsets;
+  return grid.length > 0 ? grid : undefined;
 }
 
 export interface ExportRenderOptions {
@@ -842,9 +852,14 @@ export async function exportClips(
             breathPadSec: options.keepBreath ? BREATH_PAD_SEC : 0,
             speechSpans,
             // Music bed beat grid: cut boundaries land on the music. Measured
-            // once per bed (bounded prefix) and cached for the whole batch.
+            // once per bed (bounded prefix) and cached for the whole batch,
+            // repeated out to this clip's own length when the bed loops.
             beats: options.bgmPath && options.beatSync !== false
-              ? await bgmBeatGrid(options.bgmPath, signal)
+              ? await bgmBeatGrid(
+                  options.bgmPath,
+                  stitched ? piecesDurationSec(pieces) : clip.endSec - clip.startSec,
+                  signal
+                )
               : undefined,
             transitionSec: options.transitionSec,
           });

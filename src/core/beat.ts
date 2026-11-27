@@ -9,6 +9,13 @@
  *    never forward: backward always lands in the silence the jump cut is about
  *    to remove, so a snapped cut can never eat a word or a breath that the
  *    original boundary protected.
+ *
+ * 时间轴口径(踩过一次的坑):beat 来自 BGM 文件本身,而 BGM 是从成片 0 秒
+ * 铺满的(sound-design `-stream_loop -1` + `atrim` + `asetpts`),所以 **beat 的
+ * 单位是成片时间**;而 segment.startSec 是**源片时间**(VOD 里动辄 3000 秒开外)。
+ * 两者直接相减永远差一个「这条片在源里的位置」,于是 snap 一次都不生效。
+ * 判据因此先算出每个接缝在成片上的位置(逐段时长累加,再减掉交叉淡化),
+ * 在那里找 beat,再把源片上的切点按同样的量往前挪。
  */
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
@@ -80,46 +87,91 @@ export function estimateBeatSec(onsets: number[]): number | null {
 
 export interface BeatSnapResult {
   segments: Array<{ startSec: number; endSec: number }>;
+  /** How many splices moved onto a beat. */
   snapped: number;
 }
 
+export interface BeatSnapOptions {
+  /** Furthest a splice may travel to reach a beat (default 0.12 s). */
+  maxShiftSec?: number;
+  /**
+   * Cross-fade length between kept segments. Each one shortens the output
+   * timeline, so the splice it belongs to sits that much earlier.
+   */
+  transitionSec?: number;
+}
+
 /**
- * Move each segment start onto the closest beat at or before it, within
- * `maxShiftSec`. Starts already on a beat, the first segment, and shifts that
- * would collapse a segment are left alone.
+ * Move each splice onto the closest beat at or before it, within
+ * `maxShiftSec`. `beats` are output-time seconds (see the file header);
+ * segments carry absolute source seconds.
+ *
+ * A splice already on a beat, the first segment (whose start is output 0, and
+ * moving it would drop the clip's opening), and shifts that would swallow the
+ * previous segment or collapse this one are all left alone.
  */
 export function planBeatSnap(
   segments: Array<{ startSec: number; endSec: number }>,
   beats: number[],
-  maxShiftSec = 0.12
+  options: BeatSnapOptions = {}
 ): BeatSnapResult {
+  const maxShiftSec = options.maxShiftSec ?? 0.12;
+  const transitionSec = options.transitionSec ?? 0;
   if (segments.length < 2 || beats.length === 0) return { segments: [...segments], snapped: 0 };
   const ordered = [...beats].sort((a, b) => a - b);
   let snapped = 0;
+  let keptSec = 0;
   const next = segments.map((segment, index) => {
+    // Output-time position of this splice: everything kept before it, minus one
+    // cross-fade per splice already crossed (xfade/concat semantics in cut.ts).
+    const atSec = keptSec - transitionSec * index;
+    keptSec += Math.max(0, segment.endSec - segment.startSec);
     if (index === 0) return { ...segment };
     let best: number | null = null;
     for (const beat of ordered) {
-      if (beat > segment.startSec) break;
-      if (segment.startSec - beat <= maxShiftSec) best = beat;
+      if (beat > atSec) break;
+      if (atSec - beat <= maxShiftSec) best = beat;
     }
     if (best === null) return { ...segment };
     // Already on the grid: nothing to do, and don't count it as a snap.
-    if (segment.startSec - best < 1e-3) return { ...segment };
+    if (atSec - best < 1e-3) return { ...segment };
+    // Same amount, measured on the source timeline: the cut moves back into the
+    // silence this splice is about to remove, so the beat lands on the splice.
+    const shifted = segment.startSec - (atSec - best);
     // Never let a shift swallow the previous segment or collapse this one.
     // (epsilon: 5.2 - 5 evaluates to 0.20000000000000018)
-    if (best <= segments[index - 1].endSec + 1e-6 || segment.endSec - best <= 0.2 + 1e-6) return { ...segment };
+    if (shifted <= segments[index - 1].endSec + 1e-6 || segment.endSec - shifted <= 0.2 + 1e-6) return { ...segment };
     snapped++;
-    return { startSec: Number(best.toFixed(3)), endSec: segment.endSec };
+    return { startSec: Number(shifted.toFixed(3)), endSec: segment.endSec };
   });
   return { segments: next, snapped };
+}
+
+/**
+ * Repeat a bed's onset grid across the whole output. The mixer loops the bed
+ * (`-stream_loop -1`, sound-design.ts), so a bed shorter than the clip replays
+ * its grid every bed length; a grid that already covers `untilSec` is returned
+ * as is.
+ */
+export function repeatBeatGrid(onsets: number[], periodSec: number, untilSec: number): number[] {
+  const sorted = [...onsets].sort((a, b) => a - b);
+  if (sorted.length === 0 || !(periodSec > 0) || untilSec <= periodSec) return sorted;
+  const out = [...sorted];
+  for (let shift = periodSec; shift <= untilSec; shift += periodSec) {
+    for (const onset of sorted) {
+      const at = Number((onset + shift).toFixed(3));
+      if (at > untilSec) break;
+      out.push(at);
+    }
+  }
+  return out;
 }
 
 /** Decode a bounded prefix of a music bed and return its onsets. */
 export async function detectFileOnsets(
   filePath: string,
   options: { maxSeconds?: number; signal?: AbortSignal } = {}
-): Promise<{ onsets: number[]; beatSec: number | null }> {
+): Promise<{ onsets: number[]; beatSec: number | null; analyzedSec: number }> {
   const temp = await mkdtemp(join(tmpdir(), "hotclip-beat-"));
   const pcm = join(temp, "bed.f32le");
   try {
@@ -132,8 +184,12 @@ export async function detectFileOnsets(
       options.signal
     );
     const samples = await readF32leSamples(pcm);
+    const decodedSec = samples.length / 16000;
+    // Shorter than the request means the bed ran out: this is the whole file,
+    // which is also its loop period.
+    const analyzedSec = Number(Math.min(decodedSec, options.maxSeconds ?? decodedSec).toFixed(3));
     const onsets = detectOnsets(samples, 16000);
-    return { onsets, beatSec: estimateBeatSec(onsets) };
+    return { onsets, beatSec: estimateBeatSec(onsets), analyzedSec };
   } finally {
     await rm(temp, { recursive: true, force: true }).catch(() => {});
   }

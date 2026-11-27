@@ -26,7 +26,8 @@ describe("computeJumpCut", () => {
 
   it("beat grid pulls a kept segment back and keeps the word remap in sync", () => {
     const base = computeJumpCut(words, 10, 16.5);
-    const grid = [base.segments[1].startSec - 0.08];
+    // Beats are output time, so junction 1 sits at the first piece's duration.
+    const grid = [base.segments[0].endSec - base.segments[0].startSec - 0.08];
     const snapped = computeJumpCut(words, 10, 16.5, { beats: grid });
     expect(snapped.segments[0]).toEqual(base.segments[0]);
     expect(snapped.segments[1].startSec).toBeCloseTo(base.segments[1].startSec - 0.08, 3);

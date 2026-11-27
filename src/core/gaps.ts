@@ -54,9 +54,10 @@ export interface JumpCutOptions {
    */
   speechSpans?: SpeechActivitySpan[];
   /**
-   * Music-bed beat grid (absolute source seconds). Kept-piece starts are pulled
-   * BACK onto the nearest beat so a jump cut lands on the music; a backward
-   * shift only eats silence the cut was already removing. Absent = no snapping.
+   * Music-bed beat grid in OUTPUT seconds (the bed is looped from output 0 —
+   * see beat.ts). Kept-piece starts are pulled BACK onto the nearest beat so a
+   * jump cut lands on the music; a backward shift only eats silence the cut was
+   * already removing. Absent = no snapping.
    */
   beats?: number[];
   /** Largest backward snap (seconds). Default 0.12 — inaudible on speech. */
@@ -192,9 +193,13 @@ export function computeJumpCut(
   segments = mergeShortCuts(segments);
   segments = subtractSpans(segments, forceCutSpans);
   // Beat snap runs before the word remap below, so captions, breaks, duration
-  // and the removed-time receipt all follow the snapped timeline.
+  // and the removed-time receipt all follow the snapped timeline. 判据在成片
+  // 时间轴上:beat 来自 BGM 文件,而段是源片时间(见 beat.ts 头部)。
   if (options.beats && options.beats.length > 0) {
-    segments = planBeatSnap(segments, options.beats, options.beatMaxShiftSec ?? 0.12).segments;
+    segments = planBeatSnap(segments, options.beats, {
+      maxShiftSec: options.beatMaxShiftSec ?? 0.12,
+      transitionSec,
+    }).segments;
   }
 
   const durationSec = Math.max(
