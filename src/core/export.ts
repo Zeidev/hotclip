@@ -203,6 +203,7 @@ async function cropPlanOverPieces(
       merged.composition.trackedShots += cp.composition.trackedShots;
       merged.composition.recoveryShots += cp.composition.recoveryShots;
       merged.composition.centeredShots += cp.composition.centeredShots;
+      merged.composition.clippedShots += cp.composition.clippedShots;
     }
   }
   return merged;
@@ -266,6 +267,8 @@ export interface ClipRenderOutcome {
     trackedShots: number;
     recoveryShots: number;
     centeredShots: number;
+    /** Shots whose planned crop leaves a face below 90% visible. */
+    clippedShots: number;
   };
   /** Jump-cut / filler splice outcome; null when the clip was cut whole. */
   edit: { splices: number; keptSec: number; removedSec: number; cutRatio: number } | null;

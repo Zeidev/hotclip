@@ -30,6 +30,12 @@ export interface CropKeyframe {
   x: number;
   /** Hold this crop until the next keyframe (used at shot boundaries). */
   hold?: boolean;
+  /**
+   * Ease the move that LEAVES this keyframe with a cubic smoothstep instead of
+   * a constant-velocity ramp. Used for deliberate moves (recovery, reacquire
+   * after a long loss), never for data-following points.
+   */
+  ease?: boolean;
 }
 
 export interface CropCoverageSample {
@@ -46,11 +52,15 @@ export interface CropPlanningStats {
   trackedShots: number;
   recoveryShots: number;
   centeredShots: number;
+  /** Shots where the planned crop leaves some face below 90% visible. */
+  clippedShots: number;
 }
 
 export interface CropPlanningResult {
   keyframes: CropKeyframe[];
   stats: CropPlanningStats;
+  /** Face visibility measured against the compiled trajectory. */
+  coverage: CropCoverageSample[];
 }
 
 /** Standard One Euro filter (1D). */
@@ -90,23 +100,56 @@ export class OneEuro {
   }
 }
 
-/** Hold briefly through detector flicker, then recover to source centre. */
-export function fillGaps(samples: FaceSample[]): Array<{ t: number; cx: number }> {
-  const firstValid = samples.find((s): s is FaceSample & { cx: number } => s.cx !== null);
-  if (!firstValid) return [];
-  let last: { t: number; cx: number } | null = null;
-  return samples.map((s) => {
-    if (s.cx !== null) {
-      last = { t: s.t, cx: s.cx };
-      return last;
-    }
-    return {
-      t: s.t,
-      cx: last
-        ? (s.t - last.t <= LOST_HOLD_SEC ? last.cx : 0.5)
-        : (firstValid.t - s.t <= LOST_HOLD_SEC ? firstValid.cx : 0.5),
-    };
-  });
+/** Hold the last framing through detector flicker this long before acting. */
+export const LOST_HOLD_SEC = 1.25;
+/** Seconds an eased reposition takes once a hold expires. */
+export const RECENTER_RAMP_SEC = 1.4;
+/**
+ * Ceiling on the velocity of a blind, endpoints-only pan, as a fraction of
+ * source width per second. Such a pan commits to a single speed before the
+ * renderer knows whether the subject keeps up, so a sprint has to be trailed
+ * rather than chased. The point-by-point tracking path is not capped: it emits
+ * the positions the subject was actually seen at, so its speed can never exceed
+ * the subject's own.
+ */
+export const MAX_PAN_FRAC_PER_SEC = 0.45;
+/** Keyframes emitted per tracking run (the expression supports 32 in total). */
+const MAX_TRACK_KEYFRAMES = 20;
+/** How far (source px) a kept keyframe may sit from the filtered curve. */
+const TRACK_SIMPLIFY_PX = 8;
+/**
+ * How far (as a fraction of the move's own length) the observed subject path
+ * may stray from the straight chord between its endpoints and still be followed
+ * with one constant-velocity pan. Measured on real clips: a hand-held subject
+ * walk stays under 10%, while a dwell-then-sweep strays past 25% — panning on
+ * the chord there loses the subject instead of following it.
+ */
+const LINEAR_PATH_TOL = 0.15;
+/** Minimum face-detection coverage to trust tracking at all. */
+const MIN_COVERAGE = 0.4;
+/** Std below this fraction of width = "static" shot. */
+const STATIC_STD = 0.04;
+/** Breathing room outside the union of visible face boxes. */
+const FACE_ENVELOPE_MARGIN = 0.025;
+/** Preserve intentional source centering when the ideal crop is already near it. */
+const CENTER_SNAP_DISTANCE = 0.035;
+
+/** Cubic smoothstep on [0,1]: zero velocity at both ends. */
+export function smoothstep(u: number): number {
+  const c = u <= 0 ? 0 : u >= 1 ? 1 : u;
+  return c * c * (3 - 2 * c);
+}
+
+/**
+ * Per-sample subject target. When every visible face at this instant fits the
+ * crop, aim at the middle of them (co-present faces stay in frame); otherwise
+ * follow the main face — two far-apart people cannot share one 9:16 window,
+ * and splitting the difference would clip both.
+ */
+function subjectTarget(s: FaceSample & { cx: number }, cropFrac: number): number {
+  const left = Math.min(s.left ?? s.cx, s.cx);
+  const right = Math.max(s.right ?? s.cx, s.cx);
+  return right - left <= cropFrac ? (left + right) / 2 : s.cx;
 }
 
 function hasSustainedLoss(samples: FaceSample[]): boolean {
@@ -125,18 +168,40 @@ function hasSustainedLoss(samples: FaceSample[]): boolean {
   return false;
 }
 
-/** Minimum face-detection coverage to trust tracking at all. */
-const MIN_COVERAGE = 0.4;
-/** Std below this fraction of width = "static" shot. */
-const STATIC_STD = 0.04;
-/** Dead zone: ignore moves smaller than this fraction of width. */
-const DEAD_ZONE = 0.02;
-/** Keep the last reliable subject through short detector flicker only. */
-export const LOST_HOLD_SEC = 1.25;
-/** Breathing room outside the union of visible face boxes. */
-const FACE_ENVELOPE_MARGIN = 0.025;
-/** Preserve intentional source centering when the ideal crop is already near it. */
-const CENTER_SNAP_DISTANCE = 0.035;
+/**
+ * Reduce a filtered tracking curve to as few keyframes as it can without any
+ * kept segment drifting more than TRACK_SIMPLIFY_PX from the curve: dense where
+ * the subject moves fast, two points where they stand still. A fixed time grid
+ * instead lags on a fast sweep and still spends points on a stillness.
+ */
+function simplifyTrack(
+  run: Array<{ t: number; x: number }>,
+  srcW: number
+): Array<{ t: number; x: number }> {
+  if (run.length <= 2) return run;
+  const keep = new Set<number>([0, run.length - 1]);
+  for (;;) {
+    const idx = [...keep].sort((a, b) => a - b);
+    let bestIdx = -1;
+    let bestDev = 0;
+    for (let s = 0; s < idx.length - 1; s++) {
+      const a = run[idx[s]];
+      const b = run[idx[s + 1]];
+      const span = Math.max(1e-6, b.t - a.t);
+      for (let i = idx[s] + 1; i < idx[s + 1]; i++) {
+        const u = (run[i].t - a.t) / span;
+        const dev = Math.abs(run[i].x - (a.x + (b.x - a.x) * u));
+        if (dev > bestDev) {
+          bestDev = dev;
+          bestIdx = i;
+        }
+      }
+    }
+    if (bestIdx < 0 || keep.size >= MAX_TRACK_KEYFRAMES || bestDev * srcW <= TRACK_SIMPLIFY_PX) break;
+    keep.add(bestIdx);
+  }
+  return [...keep].sort((a, b) => a - b).map((i) => run[i]);
+}
 
 export function planCropComposition(
   samples: FaceSample[],
@@ -175,81 +240,163 @@ export function planCropComposition(
     trackedShots: 0,
     recoveryShots: 0,
     centeredShots: 0,
+    clippedShots: 0,
   };
   const keyframes: CropKeyframe[] = [];
   for (const segment of segments) {
     stats.totalShots++;
-    const segmentCoverage = segment.filter((s) => s.cx !== null).length / segment.length;
-    if (segmentCoverage < MIN_COVERAGE) {
+    const visible = segment.filter((s): s is FaceSample & { cx: number } => s.cx !== null);
+    if (visible.length / segment.length < MIN_COVERAGE) {
       keyframes.push({ t: segment[0].t, x: clampX(0.5), hold: true });
       stats.centeredShots++;
       continue;
     }
-    const filled = fillGaps(segment);
-    if (filled.length === 0) continue;
-
     const hasRecovery = hasSustainedLoss(segment);
     if (hasRecovery) stats.recoveryShots++;
+    // A loss that runs to the end of the shot gets an explicit hold + eased
+    // recovery. Losses inside the shot are bridged by interpolation below.
+    const tailLost = hasRecovery && segment[segment.length - 1].cx === null;
+    const lastVisible = visible[visible.length - 1];
 
-    const visible = segment.filter((s) => s.cx !== null);
-    const envelopeLeft = Math.min(...visible.map((s) => s.left ?? s.cx ?? 0.5));
-    const envelopeRight = Math.max(...visible.map((s) => s.right ?? s.cx ?? 0.5));
+    const envelopeLeft = Math.min(...visible.map((s) => Math.min(s.left ?? s.cx, s.cx)));
+    const envelopeRight = Math.max(...visible.map((s) => Math.max(s.right ?? s.cx, s.cx)));
     const envelopeWidth = envelopeRight - envelopeLeft + FACE_ENVELOPE_MARGIN * 2;
     const hasGroup = visible.some((s) => (s.faceCount ?? 1) > 1);
 
     // Comfort-first composition: if every observed face position fits in one
     // crop, lock the virtual camera for the entire shot. This prevents small
     // body movement and multi-person turn-taking from creating artificial pan.
-    if (!hasRecovery && envelopeWidth <= cropFrac) {
+    // A brief detection loss does not disable the lock.
+    if (envelopeWidth <= cropFrac) {
       let center = (envelopeLeft + envelopeRight) / 2;
       if (Math.abs(center - 0.5) <= CENTER_SNAP_DISTANCE) center = 0.5;
-      keyframes.push({ t: filled[0].t, x: clampX(center), hold: true });
+      keyframes.push({ t: visible[0].t, x: clampX(center), hold: true });
       stats.lockedShots++;
       if (hasGroup) stats.groupLockedShots++;
+      if (tailLost) planRecovery(keyframes, lastVisible, 0.5, clampX);
       continue;
     }
 
-    const xs = filled.map((f) => f.cx);
+    const xs = visible.map((s) => subjectTarget(s, cropFrac));
     const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
     const std = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length);
     const median = [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+    const firstT = visible[0].t;
+    const lastT = lastVisible.t;
+    const shotDur = Math.max(1 / 3, lastT - firstT);
 
     if (std < STATIC_STD) {
-      keyframes.push({ t: filled[0].t, x: clampX(median), hold: true });
+      keyframes.push({ t: firstT, x: clampX(median), hold: true });
       stats.lockedShots++;
     } else {
       stats.trackedShots++;
       const drift = xs[xs.length - 1] - xs[0];
-      if (!hasRecovery && Math.abs(drift) > 2 * std) {
-        const steps = Math.min(12, filled.length);
-        for (let i = 0; i < steps; i++) {
-          const f = filled[Math.floor((i * (filled.length - 1)) / Math.max(1, steps - 1))];
-          keyframes.push({ t: f.t, x: clampX(xs[0] + (drift * i) / Math.max(1, steps - 1)) });
-        }
+      // How far the observed path strays from the straight chord between its
+      // ends, relative to the move itself.
+      let stray = 0;
+      for (let i = 0; i < xs.length; i++) {
+        const u = (visible[i].t - firstT) / shotDur;
+        stray = Math.max(stray, Math.abs(xs[i] - (xs[0] + drift * u)));
+      }
+      const straightPath = Math.abs(drift) > 1e-6 && stray <= LINEAR_PATH_TOL * Math.abs(drift);
+      // An endpoints-only move assumes the drift was observed throughout. With a
+      // sustained loss it wasn't, and panning blind across the gap is exactly
+      // what the hold-then-pan path below exists to prevent. A path that bends
+      // away from its chord is followed point by point instead: a straight pan
+      // would cut the corner and leave the subject behind.
+      if (!hasRecovery && Math.abs(drift) > 2 * std && straightPath) {
+        // Data-following pan: the subject walks at a steady pace, so matching
+        // that pace keeps them centred (easing here would lag behind them). The
+        // pace is capped, so a sprint is followed as well as it can be without
+        // the camera whipping.
+        const travel = Math.sign(drift) * Math.min(Math.abs(drift), MAX_PAN_FRAC_PER_SEC * shotDur);
+        keyframes.push({ t: firstT, x: clampX(xs[0]) });
+        keyframes.push({ t: lastT, x: clampX(xs[0] + travel), hold: true });
       } else {
+        // Real movement, filtered, then simplified down to the keyframes the
+        // expression can hold. Simplify by tolerance, never on a time grid: a
+        // grid drops the second end of a stillness (so the crop creeps across
+        // it) and spends the same keyframes on a quiet stretch as on a sweep.
         const euro = new OneEuro();
-        let lastX: number | null = null;
-        for (const f of filled) {
-          const smoothed = euro.filter(f.cx, f.t);
-          if (lastX === null || Math.abs(smoothed - lastX) > DEAD_ZONE) {
-            keyframes.push({ t: f.t, x: clampX(smoothed) });
-            lastX = smoothed;
+        const curve = visible.map((s) => ({ t: s.t, x: euro.filter(subjectTarget(s, cropFrac), s.t) }));
+        const emit = (run: Array<{ t: number; x: number }>): void => {
+          for (const point of simplifyTrack(run, srcW)) {
+            keyframes.push({ t: point.t, x: clampX(point.x) });
+          }
+        };
+        let run: Array<{ t: number; x: number }> = [];
+        for (const point of curve) {
+          const prev = run.length > 0 ? run[run.length - 1] : null;
+          if (prev && point.t - prev.t > LOST_HOLD_SEC) {
+            // Long detection gap: hold the last framing, then time the move to
+            // land as the subject reappears — never chase a face we cannot see.
+            emit(run);
+            const prevKf = keyframes[keyframes.length - 1];
+            if (prevKf) prevKf.hold = true;
+            const moveFrom = Math.max(prev.t, point.t - Math.min(RECENTER_RAMP_SEC, (point.t - prev.t) / 2));
+            keyframes.push({ t: moveFrom, x: clampX(prev.x), ease: true });
+            keyframes.push({ t: point.t, x: clampX(point.x) });
+            run = [point];
+          } else {
+            run.push(point);
           }
         }
+        emit(run);
+        const tail = keyframes[keyframes.length - 1];
+        if (tail) tail.hold = true;
       }
-      const last = keyframes[keyframes.length - 1];
-      if (last) last.hold = true;
     }
+    if (tailLost) planRecovery(keyframes, lastVisible, 0.5, clampX);
   }
   if (keyframes.length === 0) return null;
   keyframes.sort((a, b) => a.t - b.t);
   const out: CropKeyframe[] = [];
   for (const k of keyframes) {
     const last = out[out.length - 1];
-    if (last && k.x === last.x && !last.hold) continue;
+    if (last && k.x === last.x) {
+      // A plateau (the subject stood still) keeps BOTH ends: keeping only the
+      // first makes the next move interpolate across the stillness, so the crop
+      // creeps while nobody moves. Anything deeper in the plateau is dropped.
+      if (out.length >= 2 && out[out.length - 2].x === k.x) {
+        out[out.length - 1] = { ...k, hold: k.hold };
+        continue;
+      }
+    }
     out.push(k);
   }
-  return { keyframes: out, stats };
+  // Measure the trajectory that will actually run, so the receipt and the QA
+  // pass consume the same numbers the renderer does.
+  const compiled = compileCropKeyframes(out);
+  const measured = evaluateCropCoverage(samples, compiled, srcW, cropW);
+  const clipped = new Set<number>();
+  let segIndex = 0;
+  for (const sample of measured) {
+    while (segIndex < bounds.length && sample.t >= bounds[segIndex]) segIndex++;
+    if (sample.minVisibleFraction < 0.9) clipped.add(segIndex);
+  }
+  stats.clippedShots = clipped.size;
+  return { keyframes: compiled, stats, coverage: measured };
+}
+
+/**
+ * Tail-loss recovery: hold the current framing for LOST_HOLD_SEC, then ease to
+ * `centre`. The pre-2026 planner jumped to centre the moment the hold expired,
+ * an unmotivated pan with no subject on screen to justify it.
+ */
+function planRecovery(
+  keyframes: CropKeyframe[],
+  lastVisible: FaceSample & { cx: number },
+  centre: number,
+  clampX: (cxNorm: number) => number
+): void {
+  const anchor = keyframes.length > 0 ? keyframes[keyframes.length - 1].x : clampX(lastVisible.cx);
+  const target = clampX(centre);
+  if (anchor === target) return;
+  const prev = keyframes[keyframes.length - 1];
+  if (prev) prev.hold = true;
+  const holdUntil = lastVisible.t + LOST_HOLD_SEC;
+  keyframes.push({ t: holdUntil, x: anchor, ease: true });
+  keyframes.push({ t: holdUntil + RECENTER_RAMP_SEC, x: target });
 }
 
 export function planCropTrack(
@@ -271,7 +418,9 @@ export function downsampleKeyframes(kfs: CropKeyframe[], max: number): CropKeyfr
   if (kfs.length <= max) return kfs;
   const mandatory = new Set<number>([0, kfs.length - 1]);
   for (let i = 0; i < kfs.length; i++) {
-    if (!kfs[i].hold) continue;
+    // Hold boundaries and the start of an eased move both change the shape of
+    // the trajectory; dropping either makes the crop drift or snap.
+    if (!kfs[i].hold && !kfs[i].ease) continue;
     mandatory.add(i);
     if (i + 1 < kfs.length) mandatory.add(i + 1);
   }
@@ -307,7 +456,7 @@ export function cropXAtTime(keyframes: CropKeyframe[], t: number): number {
     if (t >= b.t) continue;
     if (a.hold || b.t <= a.t) return a.x;
     const p = Math.min(1, Math.max(0, (t - a.t) / (b.t - a.t)));
-    return a.x + (b.x - a.x) * p;
+    return a.x + (b.x - a.x) * (a.ease ? smoothstep(p) : p);
   }
   return keyframes[keyframes.length - 1].x;
 }
@@ -373,7 +522,13 @@ export function renderCropXExpr(keyframes: CropKeyframe[], maxKeyframes = 32): s
     const a = kfs[i];
     const b = kfs[i + 1];
     const dt = (b.t - a.t).toFixed(4);
-    const seg = a.hold ? String(a.x) : `${a.x}+${b.x - a.x}*(t-${a.t.toFixed(3)})/${dt}`;
+    const u = `((t-${a.t.toFixed(3)})/${dt})`;
+    const seg = a.hold
+      ? String(a.x)
+      : a.ease
+        // cubic smoothstep: u*u*(3-2u) — matches cropXAtTime exactly
+        ? `(${a.x}+(${b.x - a.x})*${u}*${u}*(3-2*${u}))`
+        : `(${a.x}+(${b.x - a.x})*${u})`;
     expr = `if(lt(t,${b.t.toFixed(3)}),${seg},${expr})`;
   }
   return `if(lt(t,${kfs[0].t.toFixed(3)}),${kfs[0].x},${expr})`;

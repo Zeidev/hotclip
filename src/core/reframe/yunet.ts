@@ -115,16 +115,40 @@ export class YunetDetector {
 }
 
 /**
- * Main-face selection with track continuity: the face overlapping last
+ * Match cost between a candidate and the previously tracked face. Lower is
+ * better; null means "not plausibly the same subject". Distance is measured in
+ * face-widths so it survives the fast motion that starves an IoU test (at the
+ * 3 fps sampling rate a subject can clear its own box between frames), and the
+ * size ratio rejects a different person standing nearby at a different depth.
+ */
+export function matchCost(face: FaceBox, prev: FaceBox): number | null {
+  const dx = face.x + face.w / 2 - (prev.x + prev.w / 2);
+  const dy = face.y + face.h / 2 - (prev.y + prev.h / 2);
+  const dist = Math.hypot(dx, dy) / Math.max(1, prev.w);
+  const sizeRatio = Math.max(face.w, prev.w) / Math.max(1, Math.min(face.w, prev.w));
+  if (dist <= 1.2 && sizeRatio <= 1.7) return dist + (sizeRatio - 1);
+  if (dist <= 2.5 && sizeRatio <= 2.2) return dist + (sizeRatio - 1) + 1;
+  return null;
+}
+
+/**
+ * Main-face selection with track continuity: the best plausible match to last
  * frame's pick wins even when a bigger face appears elsewhere — prevents the
  * crop from ping-ponging between people in two-person shots.
  */
 export function pickMainFace(faces: FaceBox[], prev: FaceBox | null): FaceBox | null {
   if (faces.length === 0) return null;
-  const byArea = [...faces].sort((a, b) => b.w * b.h - a.w * a.h);
   if (prev) {
-    const cont = byArea.find((f) => iou(f, prev) > 0.3);
-    if (cont) return cont;
+    let best: FaceBox | null = null;
+    let bestCost = Number.POSITIVE_INFINITY;
+    for (const face of faces) {
+      const cost = matchCost(face, prev);
+      if (cost !== null && cost < bestCost) {
+        best = face;
+        bestCost = cost;
+      }
+    }
+    if (best) return best;
   }
-  return byArea[0];
+  return [...faces].sort((a, b) => b.w * b.h - a.w * a.h)[0];
 }

@@ -2,18 +2,19 @@ import { describe, it, expect } from "vitest";
 import {
   LOST_HOLD_SEC,
   OneEuro,
+  RECENTER_RAMP_SEC,
   cropXAtTime,
   downsampleKeyframes,
   evaluateCropCoverage,
-  fillGaps,
   planCropComposition,
   planCropTrack,
   renderSendcmd,
   renderCropXExpr,
+  smoothstep,
   type FaceSample,
 } from "../reframe/track";
 import { mapToOutputTime, remapCropKeyframes } from "../reframe";
-import { decodeYunet, pickMainFace, YUNET_INPUT, type FaceBox } from "../reframe/yunet";
+import { decodeYunet, iou, matchCost, pickMainFace, YUNET_INPUT, type FaceBox } from "../reframe/yunet";
 
 function samplesOf(cxs: Array<number | null>, fps = 3): FaceSample[] {
   return cxs.map((cx, i) => ({ t: i / fps, cx }));
@@ -48,27 +49,122 @@ describe("planCropTrack modes", () => {
     const planned = planCropComposition(samples, [], W, H)!;
     const cropW = Math.floor((H * 9) / 16 / 2) * 2;
     expect(planned.keyframes).toEqual([{ t: 0, x: Math.round(W / 2 - cropW / 2), hold: true }]);
-    expect(planned.stats).toMatchObject({ lockedShots: 1, groupLockedShots: 1 });
+    expect(planned.stats).toMatchObject({ lockedShots: 1, groupLockedShots: 1, clippedShots: 0 });
   });
 
-  it("returns toward centre after a sustained detection loss", () => {
+  it("holds, then eases back to centre after a sustained detection loss", () => {
     const samples: FaceSample[] = [];
     for (let i = 0; i < 5; i++) samples.push({ t: i / 3, cx: 0.25 });
     for (let i = 5; i < 11; i++) samples.push({ t: i / 3, cx: null });
-    const filled = fillGaps(samples);
-    expect(filled[5].cx).toBe(0.25);
-    expect(filled.find((sample) => sample.t - 4 / 3 > LOST_HOLD_SEC)?.cx).toBe(0.5);
     const planned = planCropComposition(samples, [], W, H)!;
+    const cropW = Math.floor((H * 9) / 16 / 2) * 2;
     expect(planned.stats.recoveryShots).toBe(1);
-    expect(planned.keyframes.length).toBeGreaterThan(1);
-    expect(planned.keyframes.at(-1)!.x).toBeGreaterThan(planned.keyframes[0].x);
+    expect(planned.keyframes.at(-1)!.x).toBe(Math.round(W / 2 - cropW / 2));
+    const rampStart = planned.keyframes.at(-2)!;
+    expect(rampStart.ease).toBe(true);
+    // The framing holds right up to the ramp; the old planner jumped at the
+    // hold deadline, which read as an unmotivated pan.
+    const held = cropXAtTime(planned.keyframes, rampStart.t - 0.01);
+    expect(held).toBe(rampStart.x);
+    // The move leaves from rest, so a hundredth of a second in it has barely
+    // budged (a linear ramp would already be ~3px along).
+    expect(Math.abs(cropXAtTime(planned.keyframes, rampStart.t + 0.01) - rampStart.x)).toBeLessThan(1);
+    // Halfway through the ramp the crop is moving but has not arrived.
+    const mid = cropXAtTime(planned.keyframes, rampStart.t + RECENTER_RAMP_SEC / 2);
+    expect(mid).toBeGreaterThan(rampStart.x);
+    expect(mid).toBeLessThan(planned.keyframes.at(-1)!.x);
   });
 
-  it("steady drift → interpolated pan keyframes", () => {
-    const kfs = planCropTrack(samplesOf([0.3, 0.34, 0.38, 0.42, 0.46, 0.5, 0.54, 0.58]), [], W, H);
-    expect(kfs!.length).toBeGreaterThan(2);
-    // monoton increasing x
-    for (let i = 1; i < kfs!.length; i++) expect(kfs![i].x).toBeGreaterThanOrEqual(kfs![i - 1].x);
+  it("steady drift → one constant-velocity pan at the subject's own pace", () => {
+    const kfs = planCropTrack(samplesOf([0.3, 0.34, 0.38, 0.42, 0.46, 0.5, 0.54, 0.58]), [], W, H)!;
+    expect(kfs).toHaveLength(2);
+    // Following a subject who walks at a steady pace: easing would lag them.
+    expect(kfs[0].ease).toBeUndefined();
+    expect(kfs[1].x).toBeGreaterThan(kfs[0].x);
+    const at = (fraction: number): number => cropXAtTime(kfs, kfs[0].t + (kfs[1].t - kfs[0].t) * fraction);
+    const linear = (fraction: number): number => kfs[0].x + (kfs[1].x - kfs[0].x) * fraction;
+    expect(at(0.25)).toBeCloseTo(linear(0.25), 3);
+    expect(at(0.5)).toBeCloseTo(linear(0.5), 3);
+  });
+
+  it("follows a curved drift instead of cutting the corner", () => {
+    // Dwells left for 1.5 s, then sweeps right: the chord between endpoints
+    // passes far from the subject, so panning on it would lose them.
+    const kfs = planCropTrack(samplesOf([0.3, 0.3, 0.3, 0.3, 0.3, 0.55, 0.75]), [], W, H)!;
+    expect(kfs.length).toBeGreaterThan(2);
+    const mid = cropXAtTime(kfs, 1.0);
+    expect(mid).toBeLessThan(Math.round(0.3 * W - Math.floor((H * 9) / 16 / 2) * 2 / 2) + 30);
+  });
+
+  it("does not creep across a stillness before the subject moves", () => {
+    const samples = samplesOf([0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.4, 0.5, 0.6, 0.7]);
+    const kfs = planCropTrack(samples, [], W, H)!;
+    const still = Math.round(0.3 * W - Math.floor((H * 9) / 16 / 2) * 2 / 2);
+    // Subject stands still until t=1.67; the crop must stand still with them.
+    expect(cropXAtTime(kfs, 1.4)).toBe(still);
+    expect(cropXAtTime(kfs, 3)).toBeGreaterThan(still + 100);
+  });
+
+  it("clamps a fast drift so the crop never whips", () => {
+    const kfs = planCropTrack(samplesOf([0.3, 0.5, 0.8]), [], W, H)!;
+    expect(kfs).toHaveLength(2);
+    // 0.5 of the frame across 2/3 s would need a whip: the pan runs at the
+    // velocity ceiling instead, so the crop trails the subject rather than
+    // yanking across the frame.
+    const commanded = (kfs[1].x - kfs[0].x) / W;
+    expect(commanded).toBeCloseTo(0.3, 2);
+    expect(kfs[0].ease).toBeUndefined();
+  });
+
+  it("holds through a long detection gap and pans when the subject returns", () => {
+    const samples: FaceSample[] = [];
+    for (let i = 0; i < 4; i++) samples.push({ t: i / 3, cx: 0.3, left: 0.2, right: 0.4 });
+    for (let i = 4; i < 12; i++) samples.push({ t: i / 3, cx: null });
+    for (let i = 12; i < 15; i++) samples.push({ t: i / 3, cx: 0.5, left: 0.4, right: 0.6 });
+    const planned = planCropComposition(samples, [], W, H)!;
+    const held = cropXAtTime(planned.keyframes, 1);
+    // Still on the last framing well into the gap (the old planner drifted
+    // toward centre the whole time).
+    expect(cropXAtTime(planned.keyframes, 2.5)).toBe(held);
+    expect(cropXAtTime(planned.keyframes, 4)).toBeGreaterThan(held + 100);
+  });
+
+  it("aims between co-present faces while panning", () => {
+    const samples: FaceSample[] = [0, 1, 2, 3, 4].map((i) => {
+      const shift = i * 0.05;
+      return {
+        t: i / 3,
+        cx: 0.35 + shift,
+        left: 0.3 + shift,
+        right: 0.52 + shift,
+        faceCount: 2,
+        faces: [
+          { left: 0.3 + shift, right: 0.4 + shift },
+          { left: 0.42 + shift, right: 0.52 + shift },
+        ],
+      };
+    });
+    const kfs = planCropTrack(samples, [], W, H)!;
+    // union centre of the first sample is 0.41, not the main face's 0.35
+    expect(kfs[0].x).toBe(Math.round(0.41 * W - Math.floor((H * 9) / 16 / 2) * 2 / 2));
+  });
+
+  it("counts shots where the crop must clip a face", () => {
+    const samples: FaceSample[] = [0, 1 / 3, 2 / 3].map((t) => ({
+      t,
+      cx: 0.3,
+      left: 0.2,
+      right: 0.7,
+      faceCount: 2,
+      faces: [
+        { left: 0.2, right: 0.35 },
+        { left: 0.55, right: 0.7 },
+      ],
+    }));
+    const planned = planCropComposition(samples, [], W, H)!;
+    expect(planned.stats.clippedShots).toBe(1);
+    expect(planned.coverage).toHaveLength(3);
+    expect(Math.min(...planned.coverage.map((c) => c.minVisibleFraction))).toBeLessThan(0.9);
   });
 
   it("low face coverage → null (center fallback)", () => {
@@ -126,6 +222,15 @@ describe("crop trajectory / subject coverage", () => {
     expect(renderCropXExpr(keyframes)).toContain("if(lt(t,2.000),100,500)");
   });
 
+  it("compiles an eased segment as a cubic smoothstep", () => {
+    const keyframes = [
+      { t: 0, x: 100, ease: true },
+      { t: 2, x: 500, hold: true },
+    ];
+    expect(renderCropXExpr(keyframes)).toContain("*(3-2*");
+    expect(cropXAtTime(keyframes, 0.5)).toBeCloseTo(100 + 400 * smoothstep(0.25), 6);
+  });
+
   it("keeps linear motion inside a tracking shot then holds its tail", () => {
     const keyframes = [
       { t: 0, x: 100 },
@@ -166,7 +271,7 @@ describe("crop trajectory / subject coverage", () => {
   });
 });
 
-describe("OneEuro / fillGaps", () => {
+describe("OneEuro / smoothstep", () => {
   it("smooths jitter but follows real movement", () => {
     const euro = new OneEuro();
     let out = 0;
@@ -175,9 +280,14 @@ describe("OneEuro / fillGaps", () => {
     expect(Math.abs(out - 0.5)).toBeLessThan(0.01);
   });
 
-  it("fills detection gaps from the nearest valid sample", () => {
-    const filled = fillGaps(samplesOf([0.3, null, 0.6]));
-    expect(filled[1].cx).toBeCloseTo(0.3, 5); // nearest by time (t=0.33 vs t=0.67)
+  it("smoothstep eases both ends and is symmetric", () => {
+    expect(smoothstep(0)).toBe(0);
+    expect(smoothstep(1)).toBe(1);
+    expect(smoothstep(0.5)).toBe(0.5);
+    expect(smoothstep(0.25)).toBeCloseTo(0.15625, 6);
+    expect(smoothstep(0.75)).toBeCloseTo(0.84375, 6);
+    expect(smoothstep(-1)).toBe(0);
+    expect(smoothstep(2)).toBe(1);
   });
 });
 
@@ -244,6 +354,22 @@ describe("pickMainFace continuity", () => {
     const prev = box(100, 100);
     const picked = pickMainFace([box(400, 130), box(600, 90)], prev);
     expect(picked!.x).toBe(400);
+  });
+
+  it("keeps identity through motion that clears its own box between frames", () => {
+    const prev = box(100, 100); // centre x = 150
+    // The subject moved 2.05 face-widths — zero IoU with `prev` — while a
+    // differently-sized person sits further right.
+    const moved = box(300, 110);
+    expect(iou(moved, prev)).toBe(0);
+    const picked = pickMainFace([moved, box(500, 140)], prev);
+    expect(picked!.x).toBe(300);
+  });
+
+  it("rejects a face at a different depth even when it overlaps", () => {
+    const prev = box(100, 100);
+    expect(matchCost(box(100, 400), prev)).toBeNull(); // 4x the size
+    expect(matchCost(box(100, 100), prev)).toBeCloseTo(0, 6);
   });
 
   it("no previous → biggest face; empty → null", () => {

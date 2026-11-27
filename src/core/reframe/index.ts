@@ -7,13 +7,13 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { resolveFfmpegPath } from "../binaries";
-import { ffmpegVideoStreamSpecifier, probeMedia } from "../probe";
+import { ffmpegVideoStreamSpecifier, probeMedia, type MediaInfo } from "../probe";
 import { planColorRender } from "../color";
 import { analysisVideoFilter, type AnalysisVideoOptions } from "../analysis-video";
 import { ensureModel, YUNET_MODEL } from "../models";
 import { parseShowinfoTimes } from "../signals";
 import { YunetDetector, YUNET_INPUT, pickMainFace, type FaceBox } from "./yunet";
-import { compileCropKeyframes, cropHoldAtTime, cropXAtTime, evaluateCropCoverage, planCropComposition, renderSendcmd, renderCropXExpr, type CropCoverageSample, type FaceSample, type CropKeyframe, type CropPlanningStats } from "./track";
+import { compileCropKeyframes, cropHoldAtTime, cropXAtTime, planCropComposition, renderSendcmd, renderCropXExpr, type CropCoverageSample, type FaceSample, type CropKeyframe, type CropPlanningStats } from "./track";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,32 +36,33 @@ export interface CropPlan {
 
 export { renderSendcmd, renderCropXExpr };
 
+/** Keep identity through this many consecutive face-free frames (≈2 s @ 3 fps). */
+const TRACK_MEMORY_FRAMES = 6;
+
+export interface FaceScan {
+  samples: FaceSample[];
+  info: MediaInfo;
+  analysis: AnalysisVideoOptions;
+}
+
 /**
- * Build a face-tracking crop plan for one clip. `uiCrop` fractions (when the
- * screen-UI trim is active) are folded into the SAME crop so the whole
- * reframe stays one filter instance driven by sendcmd.
+ * Decode the clip at SAMPLE_FPS and track the main face per frame. Exported so
+ * the pure planner can be exercised on recorded samples without re-decoding the
+ * source (the renderer never calls this directly).
  */
-export async function generateCropPlan(
+export async function scanFaceSamples(
   inputPath: string,
   clipStartSec: number,
   clipEndSec: number,
   modelsRoot: string,
-  uiCrop?: { topFrac: number; bottomFrac: number },
   providedAnalysis?: AnalysisVideoOptions
-): Promise<CropPlan | null> {
+): Promise<FaceScan | null> {
   const info = await probeMedia(inputPath);
   if (!info.hasVideo || info.width <= 0 || info.height <= 0) return null;
   const analysis = providedAnalysis ?? {
     videoStreamIndex: info.videoStreamIndex,
     color: planColorRender(info),
   };
-
-  const top = uiCrop?.topFrac ?? 0;
-  const bottom = uiCrop?.bottomFrac ?? 0;
-  const cropY = Math.floor((info.height * top) / 2) * 2;
-  const cropH = Math.floor((info.height * Math.max(0.2, 1 - top - bottom)) / 2) * 2;
-  const cropW = Math.floor((cropH * 9) / 16 / 2) * 2;
-  if (cropW >= info.width) return null; // already narrower than 9:16
 
   await ensureModel(modelsRoot, YUNET_MODEL);
   const detector = new YunetDetector(modelsRoot);
@@ -94,10 +95,18 @@ export async function generateCropPlan(
   const frameBytes = YUNET_INPUT * YUNET_INPUT * 3;
   const samples: FaceSample[] = [];
   let prevMain: FaceBox | null = null;
+  let missed = 0;
   for (let off = 0, idx = 0; off + frameBytes <= stdout.length; off += frameBytes, idx++) {
     const faces = await detector.detect(new Uint8Array(stdout.subarray(off, off + frameBytes)));
     const main = pickMainFace(faces, prevMain);
-    prevMain = main;
+    if (main) {
+      prevMain = main;
+      missed = 0;
+    } else if (++missed > TRACK_MEMORY_FRAMES) {
+      // Clearing on the first empty frame threw identity away on a single
+      // detector hiccup; hold it through short dropouts instead.
+      prevMain = null;
+    }
     const visible = faces
       .filter((face) => face.x + face.w > padX && face.x < padX + scaledW)
       .map((face) => ({
@@ -114,10 +123,18 @@ export async function generateCropPlan(
       faces: visible,
     });
   }
+  return { samples, info, analysis };
+}
 
-  // shot cuts inside the clip (clip-relative)
+/** Shot-cut times inside the clip, clip-relative. Empty when detection fails. */
+async function detectShotCuts(
+  inputPath: string,
+  clipStartSec: number,
+  dur: number,
+  analysis: AnalysisVideoOptions
+): Promise<number[]> {
   const sceneErr = await execFileAsync(
-    ffmpeg,
+    resolveFfmpegPath(),
     [
       "-hide_banner",
       "-ss", String(clipStartSec), "-i", inputPath, "-t", String(dur), "-an",
@@ -127,19 +144,46 @@ export async function generateCropPlan(
     ],
     { maxBuffer: 64 * 1024 * 1024 }
   ).then((r) => r.stderr, () => "");
-  const cuts = parseShowinfoTimes(sceneErr);
+  return parseShowinfoTimes(sceneErr);
+}
 
+/**
+ * Build a face-tracking crop plan for one clip. `uiCrop` fractions (when the
+ * screen-UI trim is active) are folded into the SAME crop so the whole
+ * reframe stays one filter instance driven by sendcmd.
+ */
+export async function generateCropPlan(
+  inputPath: string,
+  clipStartSec: number,
+  clipEndSec: number,
+  modelsRoot: string,
+  uiCrop?: { topFrac: number; bottomFrac: number },
+  providedAnalysis?: AnalysisVideoOptions
+): Promise<CropPlan | null> {
+  const scan = await scanFaceSamples(inputPath, clipStartSec, clipEndSec, modelsRoot, providedAnalysis);
+  if (!scan) return null;
+  const { samples, info, analysis } = scan;
+
+  const top = uiCrop?.topFrac ?? 0;
+  const bottom = uiCrop?.bottomFrac ?? 0;
+  const cropY = Math.floor((info.height * top) / 2) * 2;
+  const cropH = Math.floor((info.height * Math.max(0.2, 1 - top - bottom)) / 2) * 2;
+  const cropW = Math.floor((cropH * 9) / 16 / 2) * 2;
+  if (cropW >= info.width) return null; // already narrower than 9:16
+
+  const cuts = await detectShotCuts(inputPath, clipStartSec, clipEndSec - clipStartSec, analysis);
   const planned = planCropComposition(samples, cuts, info.width, cropH);
   if (!planned) return null;
-  const keyframes = compileCropKeyframes(planned.keyframes);
   return {
-    keyframes,
+    keyframes: planned.keyframes,
     cropW,
     cropH,
     cropY,
-    x0: keyframes[0].x,
+    x0: planned.keyframes[0].x,
     composition: planned.stats,
-    coverageSamples: evaluateCropCoverage(samples, keyframes, info.width, cropW),
+    // Planner-measured against the compiled trajectory — one source of truth
+    // for both the receipt and the QA pass.
+    coverageSamples: planned.coverage,
   };
 }
 
