@@ -7,7 +7,35 @@ import {
   ZOOM_BREATH,
   ZOOM_EMPHASIS,
   ZOOM_MIN_CLIP_SEC,
+  ZOOM_PUNCH_END,
 } from "../autozoom";
+
+describe("planZoomKeyframes:punchTo(冷开场单向推近)", () => {
+  it("整段从 1.0 推到 punchTo,短于 4 秒也生效", () => {
+    expect(planZoomKeyframes(2.5, { punchTo: ZOOM_PUNCH_END })).toEqual([
+      { t: 0, z: ZOOM_BASE },
+      { t: 2.5, z: ZOOM_PUNCH_END },
+    ]);
+  });
+
+  it("punchTo 不放宽普通路径:短片仍然不运镜", () => {
+    expect(planZoomKeyframes(2.5)).toEqual([]);
+  });
+
+  it("只有起止两个关键帧(没有呼吸回落)", () => {
+    const kfs = planZoomKeyframes(3, { punchTo: ZOOM_PUNCH_END });
+    expect(kfs).toHaveLength(2);
+    expect(kfs[1].z).toBeGreaterThan(kfs[0].z);
+  });
+
+  it("buildZoomFilter:punch 短片不返回 null,保留源帧率与目标尺寸", () => {
+    const f = buildZoomFilter(2.5, 30, 1080, 1920, { punchTo: ZOOM_PUNCH_END })!;
+    expect(f).toContain("s=1080x1920");
+    expect(f).toContain("fps=30");
+    // 无 punchTo 时仍是旧行为:太短不做运镜
+    expect(buildZoomFilter(2.5, 30, 1080, 1920)).toBeNull();
+  });
+});
 
 describe("planZoomKeyframes", () => {
   it("太短的切片不做运镜(推不到位只会显得晃)", () => {

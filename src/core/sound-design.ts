@@ -19,7 +19,7 @@ import { stat, rename, rm } from "fs/promises";
 import { join } from "path";
 import { runFfmpeg, LOUDNORM_FILTER, LOUDNORM_OUT_RATE } from "./cut";
 
-export type SfxType = "whoosh" | "pop" | "ding";
+export type SfxType = "whoosh" | "pop" | "ding" | "impact";
 
 /** 一次音效打点(成片输出时间轴,秒)。 */
 export interface SfxCue {
@@ -35,6 +35,12 @@ export const SFX_MIN_SPACING_SEC = 1.5;
 const SFX_TAIL_GUARD_SEC = 0.6;
 /** 音效混入电平(相对合成素材满幅):压在人声之下、但转场瞬间可闻。 */
 export const SFX_MIX_VOLUME = 0.4;
+/** whoosh 素材的渐强时长(秒):打点提前这么多放,渐强峰值正好落在切点上。 */
+export const SFX_WHOOSH_PEAK_SEC = 0.28;
+/** whoosh 渐弱时长(秒),与合成配方一致。 */
+const SFX_WHOOSH_TAIL_SEC = 0.22;
+/** 个别音效的混入电平覆盖;缺省用 SFX_MIX_VOLUME。impact 是低频体感音,压过人声才「感觉得到」。 */
+export const SFX_MIX_LEVELS: Partial<Record<SfxType, number>> = { impact: 0.55 };
 
 /** BGM 相对人声的基准衰减(dB)——调研口径 15-20dB,取中值。 */
 export const BGM_GAIN_DB = -17;
@@ -42,10 +48,11 @@ export const BGM_GAIN_DB = -17;
 export const BGM_TAIL_FADE_SEC = 1.2;
 
 /**
- * 三类音效的 ffmpeg 合成配方(48k 单声道 wav):
+ * 四类音效的 ffmpeg 合成配方(48k 单声道 wav):
  *  - whoosh:粉噪 + 带通 + 对称淡入淡出 ≈ 噪声扫过的「呼」声,卡硬切帧
  *  - pop:高频正弦快速衰减 ≈ 轻「啵」,卡文字/钩子上屏帧
  *  - ding:基频+两个泛音的钟形衰减 ≈ 「叮」,卡情绪峰/观点落地
+ *  - impact:低频落地音(72Hz 主体 + 泛音 + 短促点击)≈ 转场「顿」感
  * 纯函数:只产参数,不执行。
  */
 export function synthSfxArgs(type: SfxType, outPath: string): string[] {
@@ -55,7 +62,8 @@ export function synthSfxArgs(type: SfxType, outPath: string): string[] {
       "-i", "anoisesrc=color=pink:r=48000:d=0.5",
       "-af",
       "highpass=f=300,lowpass=f=2400," +
-        "afade=t=in:st=0:d=0.28:curve=qsin,afade=t=out:st=0.28:d=0.22:curve=qsin,volume=0.9",
+        `afade=t=in:st=0:d=${SFX_WHOOSH_PEAK_SEC}:curve=qsin,` +
+        `afade=t=out:st=${SFX_WHOOSH_PEAK_SEC}:d=${SFX_WHOOSH_TAIL_SEC}:curve=qsin,volume=0.9`,
     ],
     pop: [
       "-f", "lavfi",
@@ -66,6 +74,12 @@ export function synthSfxArgs(type: SfxType, outPath: string): string[] {
       "-i",
       "aevalsrc=0.55*sin(2*PI*1318.5*t)*exp(-5*t)+0.28*sin(2*PI*2637*t)*exp(-7*t)+0.12*sin(2*PI*3951*t)*exp(-9*t):s=48000:d=0.8",
     ],
+    impact: [
+      "-f", "lavfi",
+      "-i",
+      "aevalsrc=0.9*sin(2*PI*72*t)*exp(-16*t)+0.35*sin(2*PI*144*t)*exp(-24*t)+0.15*sin(2*PI*1800*t)*exp(-90*t):s=48000:d=0.3",
+      "-af", "volume=0.8",
+    ],
   };
   return ["-hide_banner", "-y", ...recipes[type], "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", outPath];
 }
@@ -75,6 +89,12 @@ export interface SfxPlanInput {
   durationSec: number;
   /** 结构性硬切缝:多片段拼接缝、高潮前置迷你片→正片的接缝。 */
   seamsSec?: number[];
+  /**
+   * 冷开场接缝(迷你片→正片的切点,输出时间轴)。与普通拼接缝不同,这里放一对:
+   * whoosh 的渐强峰值正好压在切点上,impact 落在正片第一帧——转场由声音carry,
+   * 画面仍是硬切。这对是冷开场本身的一部分,不依赖全局 sfx 开关。
+   */
+  coldOpenSeamSec?: number;
   /** 开场钩子在场时的上屏时刻(通常 0 附近);null/缺省 = 没有钩子。 */
   hookAtSec?: number | null;
   /** 峰值事件时刻,按强度从高到低排列(ding 只取最高的那个)。 */
@@ -84,9 +104,9 @@ export interface SfxPlanInput {
 }
 
 /**
- * 规划音效打点。优先级:拼接缝 whoosh(结构性,观众必然感知到跳变)>
- * 情绪峰 ding > 开场钩子 pop。逐个放入,违反最小间距/越界的直接丢弃——
- * 宁缺毋滥。纯函数。
+ * 规划音效打点。优先级:冷开场转场对(whoosh 渐强压切点 + impact 落正片首帧,
+ * 冷开场自带)> 拼接缝 whoosh(结构性,观众必然感知到跳变)> 情绪峰 ding >
+ * 开场钩子 pop。逐个放入,违反最小间距/越界的直接丢弃——宁缺毋滥。纯函数。
  */
 export function planSfxCues(input: SfxPlanInput): SfxCue[] {
   const max = Math.max(0, input.maxCues ?? SFX_MAX_PER_CLIP);
@@ -99,6 +119,20 @@ export function planSfxCues(input: SfxPlanInput): SfxCue[] {
   const put = (type: SfxType, at: number): void => {
     if (placed.length < max && fits(at)) placed.push({ type, atSec: Number(at.toFixed(3)) });
   };
+
+  // 冷开场接缝先占位:whoosh 提前一个渐强时长,峰值落在切点;impact 落在
+  // 正片第一帧。这一对不参加最小间距(它们本来就贴在一起),也不与通用
+  // 打点抢先后——后放的通用打点由 fits 自己让开。
+  const coldSeam = input.coldOpenSeamSec;
+  if (
+    coldSeam !== undefined &&
+    coldSeam >= 0 &&
+    coldSeam <= input.durationSec - SFX_TAIL_GUARD_SEC &&
+    placed.length + 2 <= max
+  ) {
+    placed.push({ type: "whoosh", atSec: Number(Math.max(0, coldSeam - SFX_WHOOSH_PEAK_SEC).toFixed(3)) });
+    placed.push({ type: "impact", atSec: Number(coldSeam.toFixed(3)) });
+  }
 
   // 结构缝按时间序放(同为 whoosh,先后无强弱之分)
   for (const s of [...(input.seamsSec ?? [])].sort((a, b) => a - b)) put("whoosh", s);
@@ -160,7 +194,7 @@ export function buildSoundDesignArgs(
   for (const cue of o.cues) {
     const ms = Math.max(0, Math.round(cue.atSec * 1000));
     inputs.push("-i", join(o.sfxDir!, `${cue.type}.wav`));
-    graph.push(`[${inputIdx}:a]adelay=${ms}|${ms},volume=${SFX_MIX_VOLUME}[s${inputIdx}]`);
+    graph.push(`[${inputIdx}:a]adelay=${ms}|${ms},volume=${SFX_MIX_LEVELS[cue.type] ?? SFX_MIX_VOLUME}[s${inputIdx}]`);
     mixIns.push(`[s${inputIdx}]`);
     inputIdx++;
   }
@@ -198,8 +232,8 @@ export function buildSoundDesignArgs(
   ];
 }
 
-/** 三类音效全集(ensureSfxAssets 逐个合成)。 */
-export const SFX_TYPES: SfxType[] = ["whoosh", "pop", "ding"];
+/** 四类音效全集(ensureSfxAssets 逐个合成)。 */
+export const SFX_TYPES: SfxType[] = ["whoosh", "pop", "ding", "impact"];
 
 /**
  * 确保音效素材就位:目录里缺哪个合成哪个(用户放同名 wav 即可替换默认音)。

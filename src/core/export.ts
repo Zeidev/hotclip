@@ -15,6 +15,7 @@ import { cutClip, cutJumpClip, concatClips, type CutOptions } from "./cut";
 import { measurePieceColors, planPieceColorGrades } from "./color-match";
 import { detectFileOnsets } from "./beat";
 import { planColdOpen, planFlashForward, coldOpenQuoteText, FLASH_SKIP_NEAR_START_SEC } from "./coldopen";
+import { ZOOM_PUNCH_END } from "./autozoom";
 import { computeJumpCut, BREATH_PAD_SEC } from "./gaps";
 import { perturbLayout } from "../shared/perturb";
 import { clampTranslationLines, remapTranslationLines, type TranslationLine } from "./translate";
@@ -551,7 +552,7 @@ export async function exportClips(
     Boolean(options.captionStyle) || Boolean(options.titleCard) || Boolean(options.openingHook) ||
     Boolean(options.aigcLabel) || clips.some((c) => (c.translation?.length ?? 0) > 0);
   const assDir = needAss ? await mkdtemp(join(tmpdir(), "hotclip-ass-")) : null;
-  // 音效素材目录:首次要用时才建(mkdtemp + ffmpeg 合成三个 wav,幂等)
+  // 音效素材目录:首次要用时才建(mkdtemp + ffmpeg 合成四个 wav,幂等)
   let sfxDir: string | null = null;
   const ensureSfxDir = async (): Promise<string> => {
     if (!sfxDir) {
@@ -1279,9 +1280,17 @@ export async function exportClips(
             const miniVisualEnhance = options.autoEnhance && allowSdrVisualEnhance
               ? planVisualEnhancement(visualSamples, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }])
               : null;
+            // Zoom-in punch:迷你片整段从 1.0 单向推到 ZOOM_PUNCH_END,硬切回
+            // 正片时口径突然变宽就是「顿」。只在会走 zoompan 路径时开(竖屏或
+            // 人脸跟随);横屏正片仍是原来的 scale。帧率未知就不开——zoompan
+            // 会把素材重采样到 25fps。
+            const miniPunch =
+              srcInfo && srcInfo.fps > 0 && (miniTrack || options.vertical)
+                ? { durationSec: miniDur, fps: srcInfo.fps, punchTo: ZOOM_PUNCH_END }
+                : undefined;
             const miniCutOptions = miniTrack
-              ? { ...sourceStreams, trackPlan: miniTrack, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder }
-              : { ...sourceStreams, uiCrop, vertical: options.vertical, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder };
+              ? { ...sourceStreams, trackPlan: miniTrack, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder }
+              : { ...sourceStreams, uiCrop, vertical: options.vertical, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder };
             // 迷你片是新编码的,正片若来自 -c:v copy 或缓存,两者的 SPS/PPS
             // 不同——`-f concat -c copy` 只发布第一段(迷你片)的参数集,正片
             // 帧按错误的参数解码,接缝处就是花屏/卡顿。只在真要前置时把正片
@@ -1328,7 +1337,9 @@ export async function exportClips(
       // ——音效是锦上添花,绝不拖垮出片。
       let sfxApplied: SfxCue[] = [];
       let bgmMixed = false;
-      if (options.sfx || options.bgmPath) {
+      // 冷开场自带转场声(whoosh 渐强压切点 + impact 落正片首帧),与全局
+      // sfx 开关无关——否则默认关 sfx 的用户开了冷开场也听不到任何过渡。
+      if (options.sfx || options.bgmPath || coldOpenSec) {
         const shift = coldOpenSec ?? 0;
         const soundDur = clipDuration + shift;
         // 拼接缝(输出时间轴):whoosh 卡在观众必然感知到的内容跳变处
@@ -1339,14 +1350,15 @@ export async function exportClips(
                 .map((p) => mapToOutputTime(p.startSec, plan.segments, clip.startSec))
                 .filter((t): t is number => t !== null && t > 0.05)
             : [];
-        const cues = options.sfx
-          ? planSfxCues({
-              durationSec: soundDur,
-              seamsSec: [...stitchSeamsOut.map((t) => t + shift), ...(coldOpenSec ? [coldOpenSec] : [])],
-              hookAtSec: openingHook ? 0.05 : null,
-              peakEventsSec: peakEventsOut.map((t) => t + shift),
-            })
-          : [];
+        const cues = planSfxCues({
+          durationSec: soundDur,
+          // 冷开场接缝不走通用 seamsSec:它要 whoosh+impact 成对、且 whoosh
+          // 提前一个渐强时长(峰值落在切点),由 coldOpenSeamSec 单独处理
+          seamsSec: options.sfx ? stitchSeamsOut.map((t) => t + shift) : [],
+          coldOpenSeamSec: coldOpenSec ?? undefined,
+          hookAtSec: options.sfx && openingHook ? 0.05 : null,
+          peakEventsSec: options.sfx ? peakEventsOut.map((t) => t + shift) : [],
+        });
         if (hasSoundDesignWork({ cues, bgmPath: options.bgmPath })) {
           try {
             await applySoundDesign(

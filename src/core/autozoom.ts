@@ -18,6 +18,11 @@ export const ZOOM_BASE = 1.0;
 export const ZOOM_BREATH = 1.06;
 /** 强调时刻的推近倍率。 */
 export const ZOOM_EMPHASIS = 1.1;
+/**
+ * 冷开场迷你片的收尾景别:整段单向推近到此倍率,硬切回正片时画面口径突然
+ * 一宽就是「顿」感。与 ZOOM_EMPHASIS 同量级(再推会明显裁掉构图)。
+ */
+export const ZOOM_PUNCH_END = 1.1;
 /** 一个完整呼吸周期(推近+回落)的秒数。 */
 export const ZOOM_CYCLE_SEC = 10;
 /** 短于该时长的切片不做运镜(还没推到位片子就结束了,只会显得晃)。 */
@@ -42,6 +47,12 @@ export interface AutoZoomOptions {
   breathZoom?: number;
   emphasisZoom?: number;
   cycleSec?: number;
+  /**
+   * 单向推近的收尾倍率(>1 才生效)。给冷开场迷你片用:整段从 1.0 匀速推到
+   * 此值,不做呼吸——短于 ZOOM_MIN_CLIP_SEC 的迷你片也能推,这正是它存在的
+   * 理由(4 秒下限会把 2-3 秒的迷你片直接拒掉)。
+   */
+  punchTo?: number;
 }
 
 /**
@@ -50,6 +61,13 @@ export interface AutoZoomOptions {
  * 纯函数。
  */
 export function planZoomKeyframes(durationSec: number, options: AutoZoomOptions = {}): ZoomKeyframe[] {
+  // 单向推近(冷开场迷你片):线性推到底,不走呼吸,也不受短片下限约束
+  if (options.punchTo != null && options.punchTo > ZOOM_BASE && durationSec > 0) {
+    return [
+      { t: 0, z: ZOOM_BASE },
+      { t: durationSec, z: options.punchTo },
+    ];
+  }
   if (!(durationSec >= ZOOM_MIN_CLIP_SEC)) return [];
   const breath = options.breathZoom ?? ZOOM_BREATH;
   const emphasis = options.emphasisZoom ?? ZOOM_EMPHASIS;

@@ -102,7 +102,7 @@ export interface CutOptions {
    * 自动运镜:竖屏成片叠一层缓慢推拉(见 autozoom.ts)。需要源帧率——
    * zoompan 不传 fps 会把素材重采样到 25fps。字段齐全才生效。
    */
-  autoZoom?: { durationSec: number; fps: number; emphasisAtSec?: number[] };
+  autoZoom?: { durationSec: number; fps: number; emphasisAtSec?: number[]; punchTo?: number };
   /** Conservative source-measured picture correction; neutral/skipped plans add no filter. */
   visualEnhance?: VisualEnhancePlan | null;
   /** HDR sources are tone-mapped to a tagged SDR output before any geometric or finishing filters. */
@@ -274,6 +274,7 @@ export function buildVideoFilters(options: CutOptions): string[] {
   const zoom = options.autoZoom
     ? buildZoomFilter(options.autoZoom.durationSec, options.autoZoom.fps, 1080, 1920, {
         emphasisAtSec: options.autoZoom.emphasisAtSec,
+        punchTo: options.autoZoom.punchTo,
       })
     : null;
   const toVertical = zoom ? [zoom, "setsar=1"] : ["scale=1080:1920:flags=lanczos", "setsar=1"];
