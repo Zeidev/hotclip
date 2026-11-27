@@ -13,7 +13,7 @@ import { localized, PLATFORM_SPECS } from "../../../../shared/platform-specs";
 import { ModalShell, SectionLabel, Segmented, SwitchRow } from "../ui";
 import type { CaptionStyleChoice } from "../../../../shared/api-types";
 
-const CAPTION_ORDER: CaptionStyleChoice[] = ["keyword", "pop", "bubble", "hormozi", "minimal", "karaoke", "none"];
+const CAPTION_ORDER: CaptionStyleChoice[] = ["keyword", "pop", "kinetic", "bubble", "hormozi", "minimal", "karaoke", "none"];
 const CAPTION_KEY: Record<CaptionStyleChoice, string> = {
   none: "captionNone",
   karaoke: "captionKaraoke",
@@ -21,6 +21,7 @@ const CAPTION_KEY: Record<CaptionStyleChoice, string> = {
   pop: "captionPop",
   hormozi: "captionHormozi",
   minimal: "captionMinimal",
+  kinetic: "captionKinetic",
   bubble: "captionBubble",
 };
 
@@ -140,8 +141,7 @@ export function ExportPanel({
             <SwitchRow
               label={th("optAutoZoom")}
               hint={th("optAutoZoomHint")}
-              on={prefs.autoZoom && prefs.vertical}
-              disabled={!prefs.vertical}
+              on={prefs.autoZoom}
               onToggle={() => setPref({ autoZoom: !prefs.autoZoom })}
             />
             <SwitchRow

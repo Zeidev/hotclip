@@ -50,7 +50,7 @@ import type { AsrEngineInfo, CaptionStyleChoice, DiagnosticsProgressEvent, Diagn
 type NavKey = "ai" | "asr" | "storage" | "diagnostics" | "performance" | "brand" | "glossary" | "watch" | "lang";
 
 const QUALITY_ORDER: ExportQuality[] = ["high", "standard", "compact"];
-const CAPTION_ORDER: CaptionStyleChoice[] = ["keyword", "pop", "minimal", "hormozi", "bubble", "karaoke", "none"];
+const CAPTION_ORDER: CaptionStyleChoice[] = ["keyword", "pop", "kinetic", "minimal", "hormozi", "bubble", "karaoke", "none"];
 const CAPTION_KEY: Record<CaptionStyleChoice, string> = {
   none: "captionNone",
   karaoke: "captionKaraoke",
@@ -58,6 +58,7 @@ const CAPTION_KEY: Record<CaptionStyleChoice, string> = {
   pop: "captionPop",
   hormozi: "captionHormozi",
   minimal: "captionMinimal",
+  kinetic: "captionKinetic",
   bubble: "captionBubble",
 };
 

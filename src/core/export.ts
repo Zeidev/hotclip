@@ -11,7 +11,16 @@ import { join, basename } from "path";
 import { resolveFfmpegPath } from "./binaries";
 
 const execFileAsync = promisify(execFile);
-import { cutClip, cutJumpClip, concatClips, type CutOptions } from "./cut";
+import {
+  cutClip,
+  cutJumpClip,
+  concatClips,
+  crossfadeClips,
+  pickColdSeamTransition,
+  evenFrame,
+  COLD_SEAM_XFADE_SEC,
+  type CutOptions,
+} from "./cut";
 import { measurePieceColors, planPieceColorGrades } from "./color-match";
 import { detectFileOnsets, repeatBeatGrid } from "./beat";
 import { planColdOpen, planFlashForward, coldOpenQuoteText, FLASH_SKIP_NEAR_START_SEC } from "./coldopen";
@@ -1002,16 +1011,32 @@ export async function exportClips(
       // 爆点闪现要回源片切那一刀、吃源时间
       const peakEventPairs = clipPeaks ? mapPeakEvents(clipPeaks, plan?.segments ?? null, clip.startSec, clipDuration) : [];
       const peakEventsOut = peakEventPairs.map((p) => p.outSec);
-      // 自动运镜:只对竖屏画面有意义(音频波形图和横屏原片不做);
-      // 帧率未知就不开——zoompan 会把素材重采样到 25fps。
+      // 画面尺寸先算:运镜的输出几何与 punch-in 的拼接口径都要它。
+      // uiCrop 会削掉画面高度,运镜的输出高度必须跟着削——运镜后的分片
+      // 比正片高几行,拼接(concat/xfade)会直接失败。
+      const srcWidth = srcInfo?.width ?? 0;
+      const srcHeight = srcInfo?.height ?? 0;
+      const uiCropActive = !trackPlan && Boolean(uiCrop && (uiCrop.topFrac > 0 || uiCrop.bottomFrac > 0));
+      const horizontalFrameH =
+        uiCropActive && uiCrop
+          ? evenFrame(srcHeight * (1 - uiCrop.topFrac - uiCrop.bottomFrac))
+          : srcHeight;
+      // 运镜的输出尺寸:竖屏(或人脸跟随,裁窗本身就是竖屏口径)走 1080×1920,
+      // zoompan 顶替那一步 scale;横屏走源帧尺寸——画幅/帧率/像素格式全不变,
+      // 正片那边照旧,两边才拼得到一起。
+      const zoomGeometry = (hasTrack: boolean): { outW: number; outH: number } =>
+        hasTrack || options.vertical ? { outW: 1080, outH: 1920 } : { outW: srcWidth, outH: horizontalFrameH };
+      // 自动运镜:竖屏横屏都做(口播固定机位,两种画幅都是死的);音频波形图
+      // 不做。帧率未知就不开——zoompan 会把素材重采样到 25fps。
       // 强调时刻 = 最响的几个峰值事件——「推近必须绑定真实事件」,纯呼吸
       // 之外镜头语言要和内容对上(autozoom.ts 本就支持,这里把信号接通)
       const autoZoom =
-        options.autoZoom && options.vertical && !audioOnly && srcInfo && srcInfo.fps > 0
+        options.autoZoom && !audioOnly && srcInfo && srcInfo.fps > 0 && srcWidth > 0 && srcHeight > 0
           ? {
               durationSec: clipDuration,
               fps: srcInfo.fps,
               emphasisAtSec: peakEventsOut.slice(0, 4).sort((a, b) => a - b),
+              ...zoomGeometry(Boolean(trackPlan)),
             }
           : undefined;
       const sensitiveMuteRanges =
@@ -1026,8 +1051,6 @@ export async function exportClips(
       const baseNormalizeLoudness = smartDenoise ? false : options.normalizeLoudness;
       // Punch-in only matters on a spliced picture, and concat needs every piece
       // on the same geometry — so the source frame size is the anchor.
-      const srcWidth = srcInfo?.width ?? 0;
-      const srcHeight = srcInfo?.height ?? 0;
       const punchIn = options.punchIn !== false && srcWidth > 0 && srcHeight > 0
         ? { width: srcWidth, height: srcHeight }
         : undefined;
@@ -1264,6 +1287,8 @@ export async function exportClips(
           const miniPath = outPath.replace(/\.mp4$/, ".hook.mp4");
           const bodyPath = outPath.replace(/\.mp4$/, ".body.mp4");
           const miniDur = coPlan.endSec - coPlan.startSec;
+          // 接缝走了过场就缩短了 [0, coldOpenSec) 的偏移(见下方 crossfadeClips)
+          let seamFadeSec = 0;
           const ok = await (async (): Promise<boolean> => {
             // 迷你片字幕:钩子句卡拉OK照常;悬念句/标题/AIGC 徽标烧在开头这几秒
             // (钩子必须字幕可读——60%+ 移动端静音观看)
@@ -1295,13 +1320,13 @@ export async function exportClips(
             const miniVisualEnhance = options.autoEnhance && allowSdrVisualEnhance
               ? planVisualEnhancement(visualSamples, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }])
               : null;
-            // Zoom-in punch:迷你片整段从 1.0 单向推到 ZOOM_PUNCH_END,硬切回
-            // 正片时口径突然变宽就是「顿」。只在会走 zoompan 路径时开(竖屏或
-            // 人脸跟随);横屏正片仍是原来的 scale。帧率未知就不开——zoompan
-            // 会把素材重采样到 25fps。
+            // Zoom-in punch:迷你片整段从 1.0 单向推到 ZOOM_PUNCH_END,交叠回
+            // 正片时口径从紧到宽就是「一下」。竖屏横屏都开(见 zoomGeometry:
+            // 横屏的 zoompan 直接出源帧尺寸,正片口径不变,两边才拼得到一起)。
+            // 帧率未知就不开——zoompan 会把素材重采样到 25fps。
             const miniPunch =
-              srcInfo && srcInfo.fps > 0 && (miniTrack || options.vertical)
-                ? { durationSec: miniDur, fps: srcInfo.fps, punchTo: ZOOM_PUNCH_END }
+              srcInfo && srcInfo.fps > 0 && srcWidth > 0 && srcHeight > 0
+                ? { durationSec: miniDur, fps: srcInfo.fps, punchTo: ZOOM_PUNCH_END, ...zoomGeometry(Boolean(miniTrack)) }
                 : undefined;
             const miniCutOptions = miniTrack
               ? { ...sourceStreams, trackPlan: miniTrack, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder }
@@ -1318,8 +1343,32 @@ export async function exportClips(
               videoMode = "encode";
             }
             await cutClip(inputPath, miniPath, coPlan.startSec, coPlan.endSec, miniCutOptions, signal);
-            // 硬切拼接(通行做法);AIGC 隐式标识补到最终容器上
-            await concatClips([miniPath, bodyPath], outPath, signal, aigcMeta);
+            // 接缝过场:迷你片和正片口径不同,`-c copy` 硬切只是「画面忽然
+            // 换了」——观众看不到「剪」。改成 xfade 交叠(甩镜/擦除/淡化按
+            // 切片 id 确定性轮换),whoosh 的峰值正好压在交叠开始处。
+            // 两段都太短(交叠会吃掉内容)就回退硬切拼接,照旧出片。
+            if (miniDur > COLD_SEAM_XFADE_SEC + 0.15 && clipDuration > COLD_SEAM_XFADE_SEC + 0.15) {
+              await crossfadeClips(
+                miniPath,
+                bodyPath,
+                outPath,
+                {
+                  headSec: miniDur,
+                  transitionSec: COLD_SEAM_XFADE_SEC,
+                  transition: pickColdSeamTransition(clip.id),
+                  crf: options.crf,
+                  encoder: videoEncoder,
+                  metadata: aigcMeta,
+                },
+                signal
+              );
+              // 交叠把时间轴缩短了:正片在成片里的起点 = 迷你片长 − 交叠时长,
+              // 下游(词平移/封面/质检时长/音效接缝)全都读 coldOpenSec
+              seamFadeSec = COLD_SEAM_XFADE_SEC;
+            } else {
+              // AIGC 隐式标识补到最终容器上(copy 拼接不带元数据)
+              await concatClips([miniPath, bodyPath], outPath, signal, aigcMeta);
+            }
             await rm(miniPath, { force: true });
             await rm(bodyPath, { force: true });
             return true;
@@ -1331,7 +1380,7 @@ export async function exportClips(
             await rm(miniPath, { force: true }).catch(() => {});
             return false;
           });
-          if (ok) coldOpenSec = miniDur;
+          if (ok) coldOpenSec = miniDur - seamFadeSec;
         }
       }
 

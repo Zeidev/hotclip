@@ -71,6 +71,23 @@ export function edgeFadeFilters(durationSec: number): string[] {
 
 export type CutMode = "accurate" | "copy";
 
+/**
+ * 自动运镜规格(见 autozoom.ts)。`outW/outH` 是运镜输出的画面尺寸:
+ * 竖屏出口是 1080×1920(zoompan 顶替那一步 scale);横屏出口传**源帧尺寸**,
+ * 运镜后的几何与不走运镜时逐像素一致——拼回正片(concat/xfade)要求所有
+ * 分片尺寸相同,差一行就整条出片失败。
+ */
+export interface AutoZoomSpec {
+  durationSec: number;
+  fps: number;
+  emphasisAtSec?: number[];
+  punchTo?: number;
+  /** 运镜输出宽度;缺省 1080(竖屏出口的目标宽)。 */
+  outW?: number;
+  /** 运镜输出高度;缺省 1920(竖屏出口的目标高)。 */
+  outH?: number;
+}
+
 export interface CutOptions {
   mode?: CutMode;
   /**
@@ -99,10 +116,10 @@ export interface CutOptions {
   /** Reframe to 9:16 vertical (center crop → 1080×1920). Requires re-encode. */
   vertical?: boolean;
   /**
-   * 自动运镜:竖屏成片叠一层缓慢推拉(见 autozoom.ts)。需要源帧率——
+   * 自动运镜:成片叠一层缓慢推拉(见 autozoom.ts)。需要源帧率——
    * zoompan 不传 fps 会把素材重采样到 25fps。字段齐全才生效。
    */
-  autoZoom?: { durationSec: number; fps: number; emphasisAtSec?: number[]; punchTo?: number };
+  autoZoom?: AutoZoomSpec;
   /** Conservative source-measured picture correction; neutral/skipped plans add no filter. */
   visualEnhance?: VisualEnhancePlan | null;
   /** HDR sources are tone-mapped to a tagged SDR output before any geometric or finishing filters. */
@@ -149,7 +166,7 @@ export const PUNCH_IN_SCALE = 1.04;
  * so a crop can never ask for more rows/columns than the scaled frame has
  * ("Failed to inject frame into filter network" when it does).
  */
-function evenFrame(n: number): number {
+export function evenFrame(n: number): number {
   return Math.max(2, Math.floor(n / 2) * 2);
 }
 
@@ -270,11 +287,16 @@ export function buildVideoFilters(options: CutOptions): string[] {
   // the resulting SDR signal, preventing overlays from being tone-mapped too.
   if (toneMap) filters.push(toneMap);
   const enhance = visualEnhanceFilter(options.visualEnhance);
-  // 自动运镜:zoompan 顶替 scale 那一步(它自己出目标尺寸);返回 null 就照旧
-  const zoom = options.autoZoom
-    ? buildZoomFilter(options.autoZoom.durationSec, options.autoZoom.fps, 1080, 1920, {
-        emphasisAtSec: options.autoZoom.emphasisAtSec,
-        punchTo: options.autoZoom.punchTo,
+  // 自动运镜:zoompan 顶替 scale 那一步(它自己出目标尺寸);返回 null 就照旧。
+  // 输出尺寸默认竖屏目标 1080×1920;横屏出口由 caller 传源帧尺寸过来,
+  // 运镜后的几何才和「不走运镜」时一致(拼回正片靠尺寸完全相同)。
+  const az = options.autoZoom;
+  const zoomW = evenFrame(az?.outW && az.outW > 0 ? az.outW : 1080);
+  const zoomH = evenFrame(az?.outH && az.outH > 0 ? az.outH : 1920);
+  const zoom = az
+    ? buildZoomFilter(az.durationSec, az.fps, zoomW, zoomH, {
+        emphasisAtSec: az.emphasisAtSec,
+        punchTo: az.punchTo,
       })
     : null;
   const toVertical = zoom ? [zoom, "setsar=1"] : ["scale=1080:1920:flags=lanczos", "setsar=1"];
@@ -298,6 +320,10 @@ export function buildVideoFilters(options: CutOptions): string[] {
   if (options.vertical) {
     // Center crop to exactly 9:16 (whichever axis binds), then normalize size.
     filters.push("crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)'", ...toVertical);
+  } else if (zoom) {
+    // 横屏运镜:zoompan 自带输出尺寸,不再叠竖屏 scale——画幅、帧率、
+    // 像素格式全部保持源样,正片那边照旧是源尺寸,两边能拼到一起。
+    filters.push(zoom, "setsar=1");
   }
   if (enhance) filters.push(enhance);
   if (options.subtitlePath) {
@@ -592,5 +618,115 @@ export async function concatClips(
     const listPath = `${temporaryPath}.list.txt`;
     await writeFile(listPath, buildConcatList(paths.map((path) => resolve(path))), "utf8");
     await runFfmpeg(buildConcatArgs(listPath, temporaryPath, metadata), { signal });
+  }, signal);
+}
+
+/**
+ * 冷开场接缝的过场时长(秒)。0.24 秒:短到读作「一下」,又长到眼睛看得见
+ * ——迷你片和正片口径不同,硬切只是「画面忽然换了」,这个交叠才是剪出来的
+ * 过场。定位与 EDGE_FADE_SEC(30ms 消爆音)完全不同:那个是听不见的技术
+ * 接缝,这个是给观众看的叙事接缝。
+ */
+export const COLD_SEAM_XFADE_SEC = 0.24;
+
+/** 冷开场接缝的过场风格。由切片 id 确定性轮换:同一片段每次出片一致。 */
+export type ColdSeamTransition = "whip" | "wipe" | "fade";
+
+export const COLD_SEAM_TRANSITIONS: readonly ColdSeamTransition[] = ["whip", "wipe", "fade"];
+
+/**
+ * 风格 → xfade 转场名。whip(甩镜)用快速横向推近似:0.24 秒的 slideleft
+ * 在成片里就是「镜头横向一甩」的观感;真甩镜要运动模糊,那需要第二遍
+ * 重编码,不值得(接缝本身已经重编码一次了)。
+ */
+export function coldSeamXfadeName(transition: ColdSeamTransition): string {
+  if (transition === "whip") return "slideleft";
+  if (transition === "wipe") return "wipeleft";
+  return "fade";
+}
+
+/** 按 seed(切片 id)确定性挑一种过场——同一片段重导不会换风格。 */
+export function pickColdSeamTransition(
+  seed: string | number,
+  variants: readonly ColdSeamTransition[] = COLD_SEAM_TRANSITIONS
+): ColdSeamTransition {
+  const key = String(seed);
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return variants[hash % variants.length];
+}
+
+/**
+ * 冷开场接缝的过场参数:两段各解一码,xfade 交叠画面、acrossfade 交叠音频
+ * (两者缩短的时间轴长度相同,所以音画不脱节)。
+ * 输出总长 = headSec + 正片时长 − duration,caller 必须把 coldOpenSec 记成
+ * `headSec − duration`,下游(词平移、封面时刻、质检预期时长、音效接缝)才对得上。
+ * 纯函数,可单测。
+ */
+export function buildColdSeamArgs(
+  headPath: string,
+  bodyPath: string,
+  outputPath: string,
+  options: {
+    /** 前段(迷你片)时长,秒。 */
+    headSec: number;
+    transitionSec?: number;
+    transition?: ColdSeamTransition;
+    crf?: number;
+    preset?: string;
+    encoder?: VideoEncoder;
+    metadata?: Record<string, string>;
+  }
+): string[] {
+  // 交叠不能吃掉前段:留 50ms 余量,没余量就取这段能承受的最大值
+  const dur = Math.max(0.05, Math.min(options.transitionSec ?? COLD_SEAM_XFADE_SEC, Math.max(0.05, options.headSec - 0.05)));
+  const offset = Math.max(0, options.headSec - dur).toFixed(3);
+  const name = coldSeamXfadeName(options.transition ?? "fade");
+  const crf = Number.isFinite(options.crf) ? String(options.crf) : "18";
+  const preset = options.preset ?? "veryfast";
+  return [
+    "-hide_banner", "-y",
+    "-i", headPath,
+    "-i", bodyPath,
+    "-filter_complex",
+    `[0:v][1:v]xfade=transition=${name}:duration=${dur.toFixed(3)}:offset=${offset}[v];` +
+      `[0:a][1:a]acrossfade=d=${dur.toFixed(3)}:c1=tri:c2=tri[a]`,
+    "-map", "[v]",
+    "-map", "[a]",
+    ...videoEncoderArgs(options.encoder ?? "libx264", Number(crf), preset),
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-b:a", "192k",
+    "-movflags", "+faststart",
+    ...metadataArgs(options.metadata),
+    outputPath,
+  ];
+}
+
+/**
+ * 冷开场接缝重编码成过场。concatClips 是零损失的硬切,这条是要看得见的
+ * 交叠——代价是接缝那一遍整体重编码。硬件编码器失败时回退 libx264。
+ */
+export async function crossfadeClips(
+  headPath: string,
+  bodyPath: string,
+  outputPath: string,
+  options: Parameters<typeof buildColdSeamArgs>[3],
+  signal?: AbortSignal
+): Promise<void> {
+  await withAtomicOutput(outputPath, async (temporaryPath) => {
+    try {
+      await runFfmpeg(buildColdSeamArgs(headPath, bodyPath, temporaryPath, options), { signal });
+    } catch (e) {
+      if (options.encoder && options.encoder !== "libx264" && !signal?.aborted) {
+        await runFfmpeg(
+          buildColdSeamArgs(headPath, bodyPath, temporaryPath, { ...options, encoder: "libx264" }),
+          { signal }
+        );
+        return;
+      }
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`ffmpeg cold-open crossfade failed: ${msg.split("\n").slice(-6).join("\n")}`);
+    }
   }, signal);
 }

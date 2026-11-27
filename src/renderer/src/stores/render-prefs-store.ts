@@ -190,7 +190,7 @@ function load(): RenderPrefs {
       out.maxClips = normalizeMaxClips(out.maxClips);
       out.promptLang = normalizePromptLang(out.promptLang);
       if (!["high", "standard", "compact"].includes(out.quality)) out.quality = "high";
-      if (!["keyword", "pop", "minimal", "hormozi", "bubble", "karaoke", "none"].includes(out.captionStyle)) out.captionStyle = "keyword";
+      if (!["keyword", "pop", "kinetic", "minimal", "hormozi", "bubble", "karaoke", "none"].includes(out.captionStyle)) out.captionStyle = "keyword";
       if (!["off", "volume", "premium"].includes(out.aiCover)) out.aiCover = "off";
       if (!["basic", "smart"].includes(out.denoiseMode)) out.denoiseMode = "basic";
       return out;

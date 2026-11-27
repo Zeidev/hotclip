@@ -532,7 +532,7 @@ export interface PerformanceSummary {
 }
 
 /** Burned-in caption style choices (none = no captions; bubble = web-rendered). */
-export type CaptionStyleChoice = "none" | "karaoke" | "keyword" | "pop" | "hormozi" | "minimal" | "bubble";
+export type CaptionStyleChoice = "none" | "karaoke" | "keyword" | "pop" | "hormozi" | "minimal" | "kinetic" | "bubble";
 
 /** 水印配置:PNG 烧进画面一角。 */
 export interface BrandWatermark {

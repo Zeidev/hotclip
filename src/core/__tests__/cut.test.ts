@@ -1,5 +1,23 @@
 import { describe, it, expect } from "vitest";
-import { buildCutArgs, buildJumpCutArgs, buildVideoFilters, escapeFilterPath, metadataArgs, parseFfmpegProgress, edgeFadeFilters, LOUDNORM_FILTER, LOUDNORM_OUT_RATE, DENOISE_FILTER, EDGE_FADE_SEC } from "../cut";
+import {
+  buildCutArgs,
+  buildJumpCutArgs,
+  buildVideoFilters,
+  buildColdSeamArgs,
+  coldSeamXfadeName,
+  pickColdSeamTransition,
+  COLD_SEAM_TRANSITIONS,
+  COLD_SEAM_XFADE_SEC,
+  escapeFilterPath,
+  metadataArgs,
+  parseFfmpegProgress,
+  edgeFadeFilters,
+  LOUDNORM_FILTER,
+  LOUDNORM_OUT_RATE,
+  DENOISE_FILTER,
+  EDGE_FADE_SEC,
+  type ColdSeamTransition,
+} from "../cut";
 import type { ColorRenderPlan } from "../color";
 import type { VisualEnhancePlan } from "../visual-enhance";
 
@@ -449,5 +467,74 @@ describe("parseFfmpegProgress (切片内实时进度)", () => {
   it("无进度字段/垃圾块返回 null", () => {
     expect(parseFfmpegProgress("speed=2.5x\n")).toBeNull();
     expect(parseFfmpegProgress("")).toBeNull();
+  });
+});
+
+describe("横屏运镜(autoZoom 输出源帧尺寸)", () => {
+  it("autoZoom 给出源帧尺寸时,横屏出口走 zoompan 而不是 1080×1920 的竖屏 scale", () => {
+    const filters = buildVideoFilters({
+      autoZoom: { durationSec: 5, fps: 30, punchTo: 1.1, outW: 1920, outH: 1080 },
+    });
+    const joined = filters.join(",");
+    expect(joined).toContain("zoompan=");
+    expect(joined).toContain("s=1920x1080");
+    expect(joined).not.toContain("scale=1080:1920");
+  });
+
+  it("缺省几何仍是竖屏口径(旧行为逐字不变)", () => {
+    const filters = buildVideoFilters({ autoZoom: { durationSec: 5, fps: 30 }, vertical: true });
+    expect(filters.join(",")).toContain("s=1080x1920");
+    expect(filters.join(",")).not.toContain("s=1920x1080");
+  });
+
+  it("竖屏 + 源帧几何冲突时按调用方给的走(宽度偶数化)", () => {
+    const filters = buildVideoFilters({ autoZoom: { durationSec: 5, fps: 30, outW: 1919, outH: 1079 } });
+    expect(filters.join(",")).toContain("s=1918x1078");
+  });
+});
+
+describe("冷开场接缝过场(buildColdSeamArgs)", () => {
+  const base = { headSec: 2.5 };
+
+  it("xfade 交叠在 headSec − duration,acrossfade 同时长,画面音频都不脱节", () => {
+    const args = buildColdSeamArgs("/m/hook.mp4", "/m/body.mp4", "/m/out.mp4", { ...base, transition: "fade" });
+    const fc = args[args.indexOf("-filter_complex") + 1];
+    expect(fc).toContain(`xfade=transition=fade:duration=${COLD_SEAM_XFADE_SEC.toFixed(3)}:offset=${(2.5 - COLD_SEAM_XFADE_SEC).toFixed(3)}`);
+    expect(fc).toContain(`acrossfade=d=${COLD_SEAM_XFADE_SEC.toFixed(3)}:c1=tri:c2=tri`);
+    expect(args.slice(args.indexOf("-map"), args.indexOf("-map") + 4)).toEqual(["-map", "[v]", "-map", "[a]"]);
+  });
+
+  it("三种风格映射到 xfade 名:甩镜=slideleft、擦除=wipeleft、淡化=fade", () => {
+    const name = (transition: ColdSeamTransition): string => {
+      const args = buildColdSeamArgs("/a.mp4", "/b.mp4", "/o.mp4", { headSec: 2.5, transition });
+      return args[args.indexOf("-filter_complex") + 1];
+    };
+    expect(name("whip")).toContain("transition=slideleft");
+    expect(name("wipe")).toContain("transition=wipeleft");
+    expect(name("fade")).toContain("transition=fade");
+    expect(coldSeamXfadeName("whip")).toBe("slideleft");
+    expect(coldSeamXfadeName("wipe")).toBe("wipeleft");
+    expect(coldSeamXfadeName("fade")).toBe("fade");
+  });
+
+  it("交叠时长被前段长度封顶(不能吃掉整个迷你片)", () => {
+    const args = buildColdSeamArgs("/a.mp4", "/b.mp4", "/o.mp4", { headSec: 0.2, transitionSec: 0.5 });
+    const fc = args[args.indexOf("-filter_complex") + 1];
+    expect(fc).toContain("duration=0.150");
+    expect(fc).toContain("offset=0.050");
+  });
+
+  it("AIGC 元数据与编码参数落在拼接产物上", () => {
+    const args = buildColdSeamArgs("/a.mp4", "/b.mp4", "/o.mp4", { ...base, metadata: { comment: "AIGC=true" } });
+    expect(args.join(" ")).toContain("-metadata comment=AIGC=true");
+    expect(args).toContain("libx264");
+    expect(args).toContain("+faststart");
+  });
+
+  it("pickColdSeamTransition 确定性轮换,数字 id 也能当 seed", () => {
+    expect(pickColdSeamTransition(7)).toBe(pickColdSeamTransition(7));
+    const seen = new Set([0, 1, 2, 3, 4, 5].map((id) => pickColdSeamTransition(id)));
+    expect(seen.size).toBe(COLD_SEAM_TRANSITIONS.length);
+    expect(COLD_SEAM_TRANSITIONS).toContain(pickColdSeamTransition("clip-42"));
   });
 });

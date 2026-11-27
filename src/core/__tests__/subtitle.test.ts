@@ -9,6 +9,8 @@ import {
   buildCaptionAss,
   keywordText,
   popText,
+  kineticText,
+  captionMaxLineUnits,
   mergeKeywordWords,
   wrapTitle,
   fontNameForWords,
@@ -304,6 +306,32 @@ describe("buildCaptionAss styles", () => {
     const s = popText(unit, 0, "#00ff00");
     expect(s).toContain("\\c&H00FF00&"); // BGR
     expect(s).toContain("go ");
+  });
+
+  it("kinetic: 每个词在自己的时刻淡入(逐词长出来),当前词放大换色,接棒回白字原尺寸", () => {
+    const unit = [w("一", 10, 11), w("二", 11, 12)];
+    const s = kineticText(unit, 10);
+    // 首词:事件起点即淡入(0→120ms),920ms 二词接棒时切回白字 100%
+    expect(s).toContain("{\\alpha&HFF&\\c&H0D6EFF&\\fscx112\\fscy112\\t(0,120,\\alpha&H00&)\\t(920,920,\\c&HFFFFFF&\\fscx100\\fscy100)}一");
+    // 二词:同样先透明,920ms 起淡入,词尾 2000ms 回白字
+    expect(s).toContain("\\c&H0D6EFF&\\fscx112\\fscy112\\t(920,1040,\\alpha&H00&)\\t(2000,2000,\\c&HFFFFFF&\\fscx100\\fscy100)}二");
+  });
+
+  it("kinetic: 品牌色覆盖默认橙,拉丁词间保留空格", () => {
+    const s = kineticText([w("go", 0, 0.5), w("now", 0.5, 1)], 0, "#00ff00");
+    expect(s).toContain("\\c&H00FF00&");
+    expect(s).toContain("go ");
+  });
+
+  it("kinetic style: 块级不弹入(入场在词上)+ 字放大 + 描边厚一档 + 块宽 12 units", () => {
+    const ass = buildCaptionAss(words, 0, VERTICAL_LAYOUT, "kinetic");
+    const styleLine = ass.split("\n").find((l) => l.startsWith("Style: Caption,")) ?? "";
+    expect(styleLine).toContain(`,${Math.round(VERTICAL_LAYOUT.fontSize * 1.28)},`);
+    expect(styleLine).toContain(`,1,${VERTICAL_LAYOUT.outline + 1},1,2,`);
+    expect(styleLine).toContain("&H00FFFFFF"); // 主色白字,强调色走行内
+    expect(ass).not.toContain("\\fscx80\\fscy80"); // 不吃 pop 的整块弹入
+    expect(ass).toContain("\\alpha&HFF&");
+    expect(captionMaxLineUnits("kinetic", VERTICAL_LAYOUT)).toBe(12);
   });
 
   it("hormozi style: 短块 + 卡拉OK点亮 + 特大字/厚描边/硬阴影/60% 高度线", () => {

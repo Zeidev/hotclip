@@ -510,8 +510,12 @@ const WHITE_INLINE = "&HFFFFFF&";
  *  - minimal: 动态极简——2026 年 Hormozi 疲劳后的主流:短块卡点上屏、白字
  *    细描边软阴影、不全大写、每块至多 1 个词高亮成品牌色(数字/关键词优先),
  *    克制的 96%→100% 顶入(调研出处:RESEARCH-2026-08-CLIP-QUALITY.md 第二节)
+ *  - kinetic: 逐词动力字幕——整块不是「出现」而是逐词长出来(每个词在自己的
+ *    时刻淡入),当前词品牌色 +12% 放大,下一词接棒时回到白字原尺寸。与 pop
+ *    的区别:pop 是整块弹入后块内换色,kinetic 连入场都是逐词的,一个字一个字
+ *    跟着语音长出来,副歌式的节奏感。
  */
-export type CaptionStyle = "karaoke" | "keyword" | "pop" | "hormozi" | "minimal";
+export type CaptionStyle = "karaoke" | "keyword" | "pop" | "hormozi" | "minimal" | "kinetic";
 
 export interface CaptionOptions extends CaptionReadabilityOptions {
   fontName?: string;
@@ -571,15 +575,18 @@ function assHeader(style: CaptionStyle, layout: AssLayout, fontName: string, hig
     style === "pop" ? Math.round(layout.fontSize * 1.45)
     : style === "hormozi" ? Math.round(layout.fontSize * 1.5)
     : style === "minimal" ? Math.round(layout.fontSize * 1.12)
+    : style === "kinetic" ? Math.round(layout.fontSize * 1.28)
     : layout.fontSize;
   // hormozi:更厚的描边 + 硬阴影撑住大字;位置抬到 60% 高度线(比底部字幕
   // 醒目、又避开中心人脸)——固定占位,不随品牌位置档位走
   // minimal:细描边 + 一点软阴影——「白字柔和阴影」的动态极简质感
+  // kinetic:描边比默认厚一档 + 硬阴影——逐词放大时字缘要撑得住
   const outline =
     style === "hormozi" ? layout.outline + 3
     : style === "minimal" ? Math.max(2, layout.outline - 2)
+    : style === "kinetic" ? layout.outline + 1
     : layout.outline;
-  const shadow = style === "hormozi" ? 3 : style === "minimal" ? 1 : 0;
+  const shadow = style === "hormozi" ? 3 : style === "minimal" || style === "kinetic" ? 1 : 0;
   const captionMarginV = style === "hormozi" ? Math.round(layout.playResY * 0.4) : layout.marginV;
   const titleSize = Math.round(layout.fontSize * 0.82);
   const hookSize = Math.round(layout.fontSize * 1.25);
@@ -705,6 +712,47 @@ const HORMOZI_INTRO = "{\\fscx82\\fscy82\\t(0,70,\\fscx100\\fscy100)}";
 /** Hormozi 短块宽度:约 5 个汉字/2-3 个英文词一屏。 */
 const HORMOZI_MAX_UNITS = 10;
 
+/** Kinetic 逐词入场淡入时长:一个字长出来 120ms——跟得上语音,又不跳。 */
+const KINETIC_ENTRY_MS = 120;
+
+/** Kinetic 当前词提前点亮的毫秒数(与 pop 同款跟手感)。 */
+const KINETIC_HIGHLIGHT_LEAD_MS = 80;
+
+/** Kinetic 当前词的放大倍率(%):比 keyword 高亮的 108% 更明确。 */
+const KINETIC_SCALE = 112;
+
+/** Kinetic 块宽:比 pop 稍宽——逐词长出来时观众是在读节奏,不是读整块。 */
+const KINETIC_MAX_UNITS = 12;
+
+/**
+ * Kinetic 逐词字幕:整块不是整块出现,而是每个词在自己的时刻淡入(一句
+ * 一个字一个字长出来);当前词品牌色 + 12% 放大,下一词接棒瞬间回白字原尺寸。
+ * 入场与强调都是「相对块事件起点」的时间(块首词起点),零时长 \t 即瞬时切换。
+ * 纯函数,可单测。
+ */
+export function kineticText(unit: TranscriptWord[], chunkStartSec: number, highlightHex?: string): string {
+  const highlightInline = (highlightHex && hexToAssInline(highlightHex)) || EMBER_INLINE;
+  const onAt = (j: number): number =>
+    Math.max(0, Math.round((unit[j].startSec - chunkStartSec) * 1000) - KINETIC_HIGHLIGHT_LEAD_MS);
+  const parts: string[] = [];
+  for (let j = 0; j < unit.length; j++) {
+    const on = onAt(j);
+    const off = Math.max(
+      on + 1,
+      j + 1 < unit.length ? onAt(j + 1) : Math.round((unit[j].endSec - chunkStartSec) * 1000)
+    );
+    // 基准态就带 \alpha&HFF&(透明):不写它的话词在自己的时刻之前就已经
+    // 可见,「逐词长出来」就退化成整块出现
+    const tags =
+      `{\\alpha&HFF&\\c${highlightInline}\\fscx${KINETIC_SCALE}\\fscy${KINETIC_SCALE}` +
+      `\\t(${on},${on + KINETIC_ENTRY_MS},\\alpha&H00&)` +
+      `\\t(${off},${off},\\c${WHITE_INLINE}\\fscx100\\fscy100)}`;
+    parts.push(tags + escapeAssText(unit[j].text));
+    if (needsSpaceAfter(unit[j].text, unit[j + 1]?.text)) parts.push(" ");
+  }
+  return parts.join("");
+}
+
 /** 动态极简的顶入:96%→100%,80ms——有生气但不抢戏。 */
 const MINIMAL_INTRO = "{\\fad(80,0)\\fscx96\\fscy96\\t(0,80,\\fscx100\\fscy100)}";
 
@@ -716,6 +764,7 @@ export function captionMaxLineUnits(style: CaptionStyle, layout: AssLayout): num
   if (style === "pop") return POP_MAX_UNITS;
   if (style === "hormozi") return HORMOZI_MAX_UNITS;
   if (style === "minimal") return MINIMAL_MAX_UNITS;
+  if (style === "kinetic") return KINETIC_MAX_UNITS;
   return layout.maxLineUnits;
 }
 
@@ -829,7 +878,7 @@ export function buildCaptionAss(
   const forcedBreaks = options.forcedBreaks ?? [];
   // 说话人标签器:每条切片一个(带「上一行是谁」的状态);单人/没开不生效
   const speakerTag = createSpeakerLabeler(words, Boolean(options.speakerLabels));
-  if (style === "pop" || style === "hormozi" || style === "minimal") {
+  if (style === "pop" || style === "hormozi" || style === "minimal" || style === "kinetic") {
     const maxUnits = captionMaxLineUnits(style, layout);
     // 动态极简与 keyword 同款:先把关键词连成一个词,断块永远不劈开高亮词
     const chunkWords = style === "minimal" ? mergeKeywordWords(words, options.keywords ?? []) : words;
@@ -851,6 +900,9 @@ export function buildCaptionAss(
       } else if (style === "minimal") {
         // 动态极简:短块轻顶入,块内至多 1 处品牌色高亮(关键词/数字优先)
         events.push(dialogue(start, end, tag + MINIMAL_INTRO + minimalText(unit, options.keywords ?? [], highlightHex)));
+      } else if (style === "kinetic") {
+        // 逐词动力:块不进动画,每个词在自己的时刻淡入;当前词放大换色
+        events.push(dialogue(start, end, tag + kineticText(unit, unit[0].startSec, highlightHex)));
       } else {
         // pop:阻尼弹入 + 块内当前词换色(品牌高亮色跟手点亮)
         events.push(dialogue(start, end, tag + POP_INTRO + popText(unit, unit[0].startSec, highlightHex)));
