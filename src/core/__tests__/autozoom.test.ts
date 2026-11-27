@@ -3,6 +3,8 @@ import {
   planZoomKeyframes,
   renderZoomExpr,
   buildZoomFilter,
+  zoomSupersampleFactor,
+  zoomSupersampleStage,
   ZOOM_BASE,
   ZOOM_BREATH,
   ZOOM_EMPHASIS,
@@ -164,5 +166,27 @@ describe("buildZoomFilter", () => {
 
   it("太短的切片返回 null,调用方退回普通 scale", () => {
     expect(buildZoomFilter(2, 30, 1080, 1920)).toBeNull();
+  });
+});
+describe("zoomSupersampleFactor / zoomSupersampleStage(运镜抖动的量化网格)", () => {
+  it("1080p 的两条出口都吃得下 SS=2", () => {
+    expect(zoomSupersampleFactor(608, 1080)).toBe(2); // 竖屏裁窗
+    expect(zoomSupersampleFactor(606, 1080)).toBe(2);
+    expect(zoomSupersampleFactor(1920, 1080)).toBe(2); // 横屏整帧
+  });
+  it("工作帧超过 12MP 就退回 1(4K/1440p)", () => {
+    expect(zoomSupersampleFactor(3840, 2160)).toBe(1);
+    expect(zoomSupersampleFactor(2560, 1440)).toBe(1);
+  });
+  it("尺寸缺失或非法一律不放大——宁可有抖动,也不能把显存吃穿", () => {
+    expect(zoomSupersampleFactor(0, 1080)).toBe(1);
+    expect(zoomSupersampleFactor(1920, 0)).toBe(1);
+    expect(zoomSupersampleFactor(NaN, NaN)).toBe(1);
+    expect(zoomSupersampleFactor(-1920, 1080)).toBe(1);
+  });
+  it("阶段串:SS<2 为空串,SS=2 是 lanczos 放大 + yuv444p(消掉色度网格)", () => {
+    expect(zoomSupersampleStage(1)).toBe("");
+    expect(zoomSupersampleStage(0)).toBe("");
+    expect(zoomSupersampleStage(2)).toBe("scale=iw*2:ih*2:flags=lanczos,format=yuv444p");
   });
 });

@@ -34,6 +34,35 @@ const EMPHASIS_HOLD_SEC = 1.6;
 /** 表达式关键帧上限(与 renderCropXExpr 同量级,防嵌套过深)。 */
 const MAX_ZOOM_KEYFRAMES = 24;
 
+/**
+ * 运镜的位置量化:zoompan 与 crop 都把窗口位置对齐到**色度网格**(yuv420p
+ * 下 = 2 像素),窗口宽度还先被截成整数——1080p 竖屏 1 源像素 = 1.78 输出像素,
+ * 于是画面每 3.56 个输出像素才走一格,表现为「冻结若干帧、然后跳 3.7 像素」的
+ * 抖动。中间垫一层放大的工作帧,量化就细到 1 中间像素 = 1.78/SS 输出像素。
+ */
+export const ZOOM_SS = 2;
+/** 放大后的工作帧像素上限;超了退回 SS=1(宁可抖动也别把显存吃穿)。 */
+export const ZOOM_SS_MAX_PIXELS = 12_000_000;
+
+/**
+ * 选超采样倍率:工作帧 = 运镜输入帧 × SS,超预算(4K 横屏 33MP)就退回 1。
+ * 纯函数。`frameW/frameH` 是放大前那一帧的尺寸(crop 之后、zoompan 之前)。
+ */
+export function zoomSupersampleFactor(frameW: number, frameH: number): number {
+  if (!(frameW > 0) || !(frameH > 0)) return 1;
+  return ZOOM_SS * ZOOM_SS * frameW * frameH > ZOOM_SS_MAX_PIXELS ? 1 : ZOOM_SS;
+}
+
+/**
+ * 运镜前的超采样层:`lanczos` 放大 + `yuv444p`。后者把色度网格收掉
+ * (`log2_chroma_w/h = 0`),zoompan 里那两行 2 像素对齐的掩码随之失效——
+ * 剩下的唯一量化是放大帧自己的整像素。SS<2 返回空串(退回旧链)。
+ */
+export function zoomSupersampleStage(ss: number): string {
+  if (!(ss >= 2)) return "";
+  return `scale=iw*${ss}:ih*${ss}:flags=lanczos,format=yuv444p`;
+}
+
 export interface ZoomKeyframe {
   /** 切片内相对时间(秒)。 */
   t: number;

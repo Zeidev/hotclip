@@ -15,7 +15,7 @@ import { writeFile } from "fs/promises";
 import { resolve } from "path";
 import { resolveFfmpegPath } from "./binaries";
 import { toFfmpegTime } from "./time";
-import { buildZoomFilter } from "./autozoom";
+import { buildZoomFilter, zoomSupersampleFactor, zoomSupersampleStage } from "./autozoom";
 import { colorOutputArgs, hdrToneMapFilter, type ColorRenderPlan } from "./color";
 import { ffmpegAudioStreamSpecifier, ffmpegVideoStreamSpecifier } from "./probe";
 import { videoEncoderArgs, type VideoEncoder } from "./video-encoder";
@@ -123,6 +123,12 @@ export interface CutOptions {
    * zoompan 不传 fps 会把素材重采样到 25fps。字段齐全才生效。
    */
   autoZoom?: AutoZoomSpec;
+  /**
+   * 源画面尺寸(像素)。运镜前的超采样要按它算像素预算,竖屏居中裁剪的尺寸
+   * 也要靠它推出来;不传就当「尺寸未知」——不放大,退回逐像素等价的旧链。
+   */
+  srcW?: number;
+  srcH?: number;
   /** Conservative source-measured picture correction; neutral/skipped plans add no filter. */
   visualEnhance?: VisualEnhancePlan | null;
   /** HDR sources are tone-mapped to a tagged SDR output before any geometric or finishing filters. */
@@ -171,6 +177,27 @@ export const PUNCH_IN_SCALE = 1.04;
  */
 export function evenFrame(n: number): number {
   return Math.max(2, Math.floor(n / 2) * 2);
+}
+
+/**
+ * 运镜(zoompan)输入那一帧的尺寸——超采样的像素预算按它算。拿不到尺寸
+ * (调用方没传源画面尺寸)返回 null:无从判断放不放得下,就不放大。
+ * 竖屏居中裁剪走的是动态表达式,这里按源尺寸估一份:估错最多让预算差几
+ * 个百分点,12MP 的门槛离 1080p 的两三倍还远。纯函数。
+ */
+function zoomFrameSize(options: CutOptions, panning: boolean): { w: number; h: number } | null {
+  const track = options.trackPlan;
+  if (track) return { w: track.cropW + (panning ? 2 : 0), h: track.cropH };
+  const srcW = options.srcW ?? 0;
+  const srcH = options.srcH ?? 0;
+  if (!(srcW > 0) || !(srcH > 0)) return null;
+  const ui = options.uiCrop;
+  const tall =
+    ui && (ui.topFrac > 0 || ui.bottomFrac > 0)
+      ? srcH * Math.max(0.2, 1 - ui.topFrac - ui.bottomFrac)
+      : srcH;
+  if (!options.vertical) return { w: srcW, h: tall };
+  return { w: Math.min(srcW, (tall * 9) / 16), h: Math.min(tall, (srcW * 16) / 9) };
 }
 
 /** -metadata k=v 参数对(纯函数,cut 与 audiogram 共用)。 */
@@ -302,10 +329,40 @@ export function buildVideoFilters(options: CutOptions): string[] {
         punchTo: az.punchTo,
       })
     : null;
-  const toVertical = zoom ? [zoom, "setsar=1"] : ["scale=1080:1920:flags=lanczos", "setsar=1"];
-  if (options.trackPlan) {
-    const p = options.trackPlan;
-    filters.push(`crop=w=${p.cropW}:h=${p.cropH}:x='${p.cropXExpr}':y=${p.cropY}`);
+  // 运镜的位置量化只到「色度网格」:zoompan 的窗口坐标取整后按 2 像素对齐,
+  // crop 的 x 同样被对齐到 2 像素(yuv420p)。1080p 竖屏裁 606 宽再放到 1080,
+  // 1 源像素 = 1.78 输出像素 → 每 3.56 输出像素才走一格,观感就是「冻一阵、
+  // 再跳一下」。中间垫一层放大的 444p 工作帧,量化细到 1 工作像素(见
+  // autozoom.ts ZOOM_SS):444p 让色度网格消失,放大帧自己的整像素就是新网格。
+  const track = options.trackPlan;
+  const panning = track ? /\bt\b/.test(track.cropXExpr) : false;
+  const frame = zoom ? zoomFrameSize(options, panning) : null;
+  const ss = frame ? zoomSupersampleFactor(frame.w, frame.h) : 1;
+  const ssStage = zoomSupersampleStage(ss);
+  // 借 1 像素:窗口左边从 floor(X)-1 起、整体多裁 2 列,放大的工作帧上再把
+  // 亚像素余量补回去——位置量化从 2 源像素(3.56 输出像素)降到 1 工作像素。
+  // 借不动(源宽不够、没有平移)就退回旧链:宁可有抖动,也不裁到画面外。
+  const borrow = track !== undefined && panning && ssStage !== "" && (options.srcW ?? 0) >= track.cropW + 2;
+  /** 真的垫过工作帧的链路,收尾才需要转回 420p(concat/xfade/编码器都要)。 */
+  const ssUsed = ssStage !== "";
+  const ssTail = ssUsed ? ["format=yuv420p"] : [];
+  const toVertical = zoom
+    ? [zoom, "setsar=1", ...ssTail]
+    : ["scale=1080:1920:flags=lanczos", "setsar=1"];
+  if (track) {
+    if (borrow) {
+      filters.push(
+        `crop=w=${track.cropW + 2}:h=${track.cropH}:x='floor(${track.cropXExpr})-1':y=${track.cropY}:exact=1`,
+        ssStage,
+        `crop=w=${ss * track.cropW}:h=${ss * track.cropH}:x='${ss}*(1+(${track.cropXExpr})-floor(${track.cropXExpr}))':y=0`
+      );
+    } else {
+      // 固定机位:没有亚像素余量要补,放大帧只治 zoompan 自己的色度网格对齐
+      filters.push(
+        `crop=w=${track.cropW}:h=${track.cropH}:x='${track.cropXExpr}':y=${track.cropY}`,
+        ...(ssUsed ? [ssStage] : [])
+      );
+    }
     filters.push(...toVertical);
     if (enhance) filters.push(enhance);
     if (options.subtitlePath) {
@@ -322,11 +379,16 @@ export function buildVideoFilters(options: CutOptions): string[] {
   }
   if (options.vertical) {
     // Center crop to exactly 9:16 (whichever axis binds), then normalize size.
-    filters.push("crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)'", ...toVertical);
+    // 居中裁剪的尺寸是动态表达式,超采样用不太精确的那份估算(只是像素预算)。
+    filters.push(
+      "crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)'",
+      ...(ssUsed ? [ssStage] : []),
+      ...toVertical
+    );
   } else if (zoom) {
     // 横屏运镜:zoompan 自带输出尺寸,不再叠竖屏 scale——画幅、帧率、
     // 像素格式全部保持源样,正片那边照旧是源尺寸,两边能拼到一起。
-    filters.push(zoom, "setsar=1");
+    filters.push(...(ssUsed ? [ssStage] : []), zoom, "setsar=1", ...ssTail);
   }
   if (enhance) filters.push(enhance);
   if (options.subtitlePath) {

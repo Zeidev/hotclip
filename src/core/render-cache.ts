@@ -7,7 +7,9 @@ import { createHash, randomUUID } from "crypto";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, utimes } from "fs/promises";
 import { resolve } from "path";
 
-export const RENDER_CACHE_VERSION = 1;
+// v2:运镜前多了一层超采样工作帧(scale+format=yuv444p),crop 的窗口位置在
+// 放大帧上重新量化——同一批选项的旧缓存是抖动版,必须失效重出。
+export const RENDER_CACHE_VERSION = 2;
 export const DEFAULT_RENDER_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
 const PARTIAL_ENTRY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 

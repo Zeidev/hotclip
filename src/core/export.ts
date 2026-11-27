@@ -1110,9 +1110,11 @@ export async function exportClips(
         ? { width: srcWidth, height: srcHeight }
         : undefined;
       const cutOptions: CutOptions = trackPlan
-        ? { ...sourceStreams, trackPlan, autoZoom, visualEnhance, color: activeColor, subtitlePath, fontsDir: subtitlePath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: sensitiveMuteRanges, watermark, metadata: aigcMeta, crf: options.crf, encoder: videoEncoder }
+        ? { ...sourceStreams, srcW: srcWidth, srcH: srcHeight, trackPlan, autoZoom, visualEnhance, color: activeColor, subtitlePath, fontsDir: subtitlePath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: sensitiveMuteRanges, watermark, metadata: aigcMeta, crf: options.crf, encoder: videoEncoder }
         : {
             ...sourceStreams,
+            srcW: srcWidth,
+            srcH: srcHeight,
             uiCrop,
             vertical: options.vertical,
             autoZoom,
@@ -1420,8 +1422,8 @@ export async function exportClips(
                 ? { durationSec: miniDur, fps: srcInfo.fps, punchTo: ZOOM_PUNCH_END, ...zoomGeometry(Boolean(miniTrack)) }
                 : undefined;
             const miniCutOptions = miniTrack
-              ? { ...sourceStreams, trackPlan: miniTrack, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder }
-              : { ...sourceStreams, uiCrop, vertical: options.vertical, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder };
+              ? { ...sourceStreams, srcW: srcWidth, srcH: srcHeight, trackPlan: miniTrack, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder }
+              : { ...sourceStreams, srcW: srcWidth, srcH: srcHeight, uiCrop, vertical: options.vertical, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder };
             // 迷你片是新编码的,正片若来自 -c:v copy 或缓存,两者的 SPS/PPS
             // 不同——`-f concat -c copy` 只发布第一段(迷你片)的参数集,正片
             // 帧按错误的参数解码,接缝处就是花屏/卡顿。只在真要前置时把正片

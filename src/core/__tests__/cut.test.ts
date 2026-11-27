@@ -561,3 +561,85 @@ describe("冷开场接缝过场(buildColdSeamArgs)", () => {
     expect(COLD_SEAM_TRANSITIONS).toContain(pickColdSeamTransition("clip-42"));
   });
 });
+
+describe("运镜超采样(zoompan/crop 的位置量化)", () => {
+  const az = { durationSec: 5, fps: 30 };
+  const panExpr = "if(lt(t,1.000),400,500)";
+
+  it("人脸跟随之平移:借 1 像素的源裁窗 + 放大帧上补亚像素余量", () => {
+    const filters = buildVideoFilters({
+      srcW: 1920,
+      srcH: 1080,
+      trackPlan: { cropXExpr: panExpr, cropW: 606, cropH: 1080, cropY: 0 },
+      autoZoom: az,
+    });
+    // 整体多裁 2 列、左边从 floor(X)-1 起,exact=1 才不会被色度网格再对齐一次
+    expect(filters[0]).toBe(`crop=w=608:h=1080:x='floor(${panExpr})-1':y=0:exact=1`);
+    expect(filters[1]).toBe("scale=iw*2:ih*2:flags=lanczos,format=yuv444p");
+    // 余量在放大帧上补回:X 的小数部分 × SS,量化细到 1 工作像素(0.89 输出像素)
+    expect(filters[2]).toBe(`crop=w=1212:h=2160:x='2*(1+(${panExpr})-floor(${panExpr}))':y=0`);
+    expect(filters[3]).toContain("zoompan=");
+    expect(filters.indexOf("format=yuv420p")).toBeGreaterThan(filters.findIndex((f) => f.startsWith("zoompan=")));
+  });
+
+  it("固定机位:只放大,不借位(没有亚像素余量要补)", () => {
+    const filters = buildVideoFilters({
+      srcW: 1920,
+      srcH: 1080,
+      trackPlan: { cropXExpr: "500", cropW: 606, cropH: 1080, cropY: 0 },
+      autoZoom: az,
+    });
+    expect(filters[0]).toBe("crop=w=606:h=1080:x='500':y=0");
+    expect(filters[1]).toBe("scale=iw*2:ih*2:flags=lanczos,format=yuv444p");
+    expect(filters.join(",")).not.toContain("floor(");
+  });
+
+  it("不给源尺寸就不借位——借不借得动无从判断,但放大照做", () => {
+    const filters = buildVideoFilters({
+      trackPlan: { cropXExpr: panExpr, cropW: 606, cropH: 1080, cropY: 0 },
+      autoZoom: az,
+    });
+    // 裁窗计划的尺寸自己是齐的,超采样不需要源尺寸;借位需要(要保证裁得下)。
+    expect(filters[0]).toBe(`crop=w=606:h=1080:x='${panExpr}':y=0`);
+    expect(filters[1]).toBe("scale=iw*2:ih*2:flags=lanczos,format=yuv444p");
+    expect(filters.join(",")).not.toContain("floor(");
+  });
+
+  it("超预算(4K 横屏整帧 33MP)不放大,旧链逐像素不变", () => {
+    const filters = buildVideoFilters({
+      srcW: 3840,
+      srcH: 2160,
+      autoZoom: { ...az, outW: 3840, outH: 2160 },
+    });
+    expect(filters.join(",")).not.toContain("scale=iw*");
+    expect(filters.join(",")).not.toContain("format=yuv444p");
+    expect(filters.join(",")).toContain("zoompan=");
+  });
+
+  it("竖屏居中裁剪:放大层插在裁剪与 zoompan 之间", () => {
+    const filters = buildVideoFilters({ srcW: 1920, srcH: 1080, vertical: true, autoZoom: az });
+    const joined = filters.join(",");
+    expect(joined).toContain("crop=w='min(iw,ih*9/16)':h='min(ih,iw*16/9)',scale=iw*2:ih*2:flags=lanczos,format=yuv444p,zoompan=");
+    expect(joined.endsWith(",setsar=1,format=yuv420p")).toBe(true);
+  });
+
+  it("横屏出口:同一层放大,收尾照样回到 420p(正片那边等着拼)", () => {
+    const joined = buildVideoFilters({
+      srcW: 1920,
+      srcH: 1080,
+      autoZoom: { ...az, outW: 1920, outH: 1080 },
+    }).join(",");
+    expect(joined.startsWith("scale=iw*2:ih*2:flags=lanczos,format=yuv444p,zoompan=")).toBe(true);
+    expect(joined.endsWith("s=1920x1080:fps=30,setsar=1,format=yuv420p")).toBe(true);
+  });
+
+  it("不运镜就没有放大层(关掉运镜的成片一个像素都不该变)", () => {
+    const joined = buildVideoFilters({
+      srcW: 1920,
+      srcH: 1080,
+      trackPlan: { cropXExpr: panExpr, cropW: 606, cropH: 1080, cropY: 0 },
+    }).join(",");
+    expect(joined).not.toContain("scale=iw*");
+    expect(joined).not.toContain("zoompan=");
+  });
+});

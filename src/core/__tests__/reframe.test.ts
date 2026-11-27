@@ -414,3 +414,30 @@ describe("pickMainFace continuity", () => {
     expect(pickMainFace([], null)).toBeNull();
   });
 });
+
+describe("裁窗边距(运镜超采样要借 1 像素)", () => {
+  const W = 1920;
+  const H = 1080;
+  const cropW = Math.floor((H * 9) / 16 / 2) * 2;
+
+  it("贴左缘的主体:裁窗不贴到 0,留 1 像素给 floor(X)-1", () => {
+    const kfs = planCropTrack(samplesOf([0, 0.01, 0.02, 0.03, 0.04]), [], W, H)!;
+    expect(Math.min(...kfs.map((k) => k.x))).toBeGreaterThanOrEqual(1);
+  });
+
+  it("贴右缘的主体:裁窗右边也留 1 像素(放大帧上还要多裁 2 列)", () => {
+    const kfs = planCropTrack(samplesOf([1, 0.99, 0.98, 0.97, 0.96]), [], W, H)!;
+    expect(Math.max(...kfs.map((k) => k.x))).toBeLessThanOrEqual(W - cropW - 1);
+  });
+
+  it("余量不足 2 像素时不借位,裁窗仍完整落在画面里", () => {
+    const srcH = 1080;
+    const srcW = cropW + 1; // 只剩 1 像素余量:借不动
+    const kfs = planCropTrack(samplesOf([0, 0.5, 1]), [], srcW, srcH)!;
+    expect(kfs.length).toBeGreaterThan(0);
+    for (const k of kfs) {
+      expect(k.x).toBeGreaterThanOrEqual(0);
+      expect(k.x).toBeLessThanOrEqual(srcW - cropW);
+    }
+  });
+});

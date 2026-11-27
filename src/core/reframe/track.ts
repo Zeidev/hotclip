@@ -215,8 +215,13 @@ export function planCropComposition(
   if (coverage < MIN_COVERAGE) return null;
 
   const cropFrac = cropW / srcW;
+  // 留 1 像素边距:运镜的超采样链要在窗口左右各借 1 像素(见 cut.ts 的
+  // floor(X)-1 与 autozoom.ts 的 ZOOM_SS),贴边时 crop 会把自己裁窄、窗口
+  // 宽度就不是常量了。代价是构图最多挪 1 像素,远小于色度网格本来就会
+  // 造成的 2 像素抖动。
+  const edge = srcW - cropW >= 2 ? 1 : 0;
   const clampX = (cxNorm: number): number =>
-    Math.round(Math.min(Math.max(cxNorm * srcW - cropW / 2, 0), srcW - cropW));
+    Math.round(Math.min(Math.max(cxNorm * srcW - cropW / 2, edge), srcW - cropW - edge));
 
   // split samples into shot segments at the cut times
   const bounds = [...cuts].sort((a, b) => a - b);
