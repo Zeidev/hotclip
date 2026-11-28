@@ -585,6 +585,42 @@ export function genrePauseGapSec(id: string | undefined): number {
   return (norm && GENRE_PAUSE_GAP_SEC[norm]) || DEFAULT_PAUSE_GAP_SEC;
 }
 
+/**
+ * 各品类的节奏目标(秒):一个镜头超过这么久就在词间静音处补一刀(gaps.ts
+ * splitLongSegments)。**只给「画面信息量高、停留就掉留存」的品类设**——
+ * 游戏一局团战、带货一个演示、萌宠一个动作,连着看 15 秒同机位人就走了;
+ * 而知识/手工/访谈的看点是「把一件事说完」,补刀反而把信息切碎,所以不设。
+ *
+ * 数字取自 2026 调研口径(RESEARCH-2026-08-CLIP-QUALITY.md):短视频高完播片段
+ * 的镜头时长集中在 2-6 秒;这里取上限一侧,配合跳剪已有的推进镜头(奇偶缩放)
+ * 就是「节奏目标」而不是「快切」。
+ */
+const GENRE_MAX_SHOT_SEC: Partial<Record<GenreId, number>> = {
+  pet: 5, // 一个动作看清就够了
+  game: 6,
+  esports: 6,
+  sports: 7,
+  show: 8, // 表演段落:一轮副歌 ≈ 8 秒
+  food: 8,
+  vtuber: 8,
+  shopping: 8, // 一个演示动作的长度
+  outdoor: 8,
+  looks: 9, // 连麦一来一回
+  talk: 10, // 杂谈:一个包袱的长度
+};
+
+/**
+ * 节奏目标的默认档:不限。历史成片一个镜头都没补过刀,未配置的品类
+ * (知识/手工/访谈/电台/auto/custom)必须保持原样——节奏目标只由品类启用。
+ */
+export const DEFAULT_MAX_SHOT_SEC = Infinity;
+
+/** 按品类取节奏目标(秒);未知/未配置回落 ∞ = 不限。纯函数。 */
+export function genreMaxShotSec(id: string | undefined): number {
+  const norm = normalizeGenreId(id) as GenreId | undefined;
+  return (norm && GENRE_MAX_SHOT_SEC[norm]) || DEFAULT_MAX_SHOT_SEC;
+}
+
 /** 用户自定义判据的长度上限(防止塞爆提示词)。 */
 export const GENRE_CUSTOM_MAX_CHARS = 1200;
 

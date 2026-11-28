@@ -12,6 +12,7 @@ import { planColorRender } from "../color";
 import { analysisVideoFilter, type AnalysisVideoOptions } from "../analysis-video";
 import { ensureModel, YUNET_MODEL } from "../models";
 import { parseShowinfoTimes } from "../signals";
+import type { SpeakerTurn } from "../diarize";
 import { YunetDetector, YUNET_INPUT, pickMainFace, type FaceBox } from "./yunet";
 import { compileCropKeyframes, cropHoldAtTime, cropXAtTime, planCropComposition, renderSendcmd, renderCropXExpr, type CropCoverageSample, type FaceSample, type CropKeyframe, type CropPlanningStats } from "./track";
 
@@ -158,7 +159,13 @@ export async function generateCropPlan(
   clipEndSec: number,
   modelsRoot: string,
   uiCrop?: { topFrac: number; bottomFrac: number },
-  providedAnalysis?: AnalysisVideoOptions
+  providedAnalysis?: AnalysisVideoOptions,
+  /**
+   * Diarization turns (absolute source seconds). When two people are too far
+   * apart for one 9:16 crop, the planner then keeps whoever is talking instead
+   * of the biggest face. Absent turns = the old behaviour, exactly.
+   */
+  speakerTurns?: SpeakerTurn[]
 ): Promise<CropPlan | null> {
   const scan = await scanFaceSamples(inputPath, clipStartSec, clipEndSec, modelsRoot, providedAnalysis);
   if (!scan) return null;
@@ -172,7 +179,7 @@ export async function generateCropPlan(
   if (cropW >= info.width) return null; // already narrower than 9:16
 
   const cuts = await detectShotCuts(inputPath, clipStartSec, clipEndSec - clipStartSec, analysis);
-  const planned = planCropComposition(samples, cuts, info.width, cropH);
+  const planned = planCropComposition(samples, cuts, info.width, cropH, activeSpeakersFor(samples, clipStartSec, speakerTurns));
   if (!planned) return null;
   return {
     keyframes: planned.keyframes,
@@ -185,6 +192,23 @@ export async function generateCropPlan(
     // for both the receipt and the QA pass.
     coverageSamples: planned.coverage,
   };
+}
+
+/**
+ * Who is talking at each sampled frame, as diarization speaker ids (null =
+ * nobody/unknown). Samples are clip-relative; turns are absolute source time.
+ */
+function activeSpeakersFor(
+  samples: FaceSample[],
+  clipStartSec: number,
+  turns?: SpeakerTurn[]
+): Array<number | null> | undefined {
+  if (!turns || turns.length === 0) return undefined;
+  return samples.map((s) => {
+    const t = s.t + clipStartSec;
+    const turn = turns.find((turn) => t >= turn.startSec && t <= turn.endSec);
+    return turn ? turn.speaker : null;
+  });
 }
 
 /**

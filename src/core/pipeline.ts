@@ -266,6 +266,8 @@ export async function autoClip(videoPath: string, cfg: AutoClipConfig): Promise<
           : sliceWords(transcript, c.startSec, c.endSec)
         : undefined,
       keywords: c.keywords,
+      // 收口成环:评审判过「最后一句绕回第一句」的短片段(见 export.ts ExportClipSpec.loop)
+      loop: c.loop === true ? true : undefined,
       meta: {
         hook: c.hook,
         coldOpenQuote: c.coldOpenQuote,

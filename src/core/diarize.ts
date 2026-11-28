@@ -153,6 +153,30 @@ export function dominantSpeaker(words: TranscriptWord[]): number | undefined {
   return best;
 }
 
+/** A silent gap longer than this ends a turn even when the speaker keeps talking. */
+const TURN_BREAK_GAP_SEC = 2;
+
+/**
+ * Rebuild turns from word-level speaker ids, which is the only form the render
+ * path carries.
+ * Consecutive words of one speaker collapse into one turn; a speaker change or a
+ * gap longer than TURN_BREAK_GAP_SEC closes it. Unlabeled words are skipped, so
+ * an undiarized transcript yields nothing and every caller keeps its old path.
+ */
+export function speakerTurnsFromWords(words: TranscriptWord[]): SpeakerTurn[] {
+  const sorted = words.filter((w) => w.speaker !== undefined).sort((a, b) => a.startSec - b.startSec);
+  const turns: SpeakerTurn[] = [];
+  for (const w of sorted) {
+    const last = turns[turns.length - 1];
+    if (last && last.speaker === w.speaker && w.startSec - last.endSec <= TURN_BREAK_GAP_SEC) {
+      last.endSec = Math.max(last.endSec, w.endSec);
+      continue;
+    }
+    turns.push({ startSec: w.startSec, endSec: w.endSec, speaker: w.speaker as number });
+  }
+  return turns;
+}
+
 /**
  * Label a whole transcript: assign each word a speaker (max-overlap), then set
  * each segment's dominant speaker. Returns a new transcript; the original is

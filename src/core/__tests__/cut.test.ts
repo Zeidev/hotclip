@@ -16,6 +16,10 @@ import {
   LOUDNORM_OUT_RATE,
   DENOISE_FILTER,
   EDGE_FADE_SEC,
+  SEAM_LEAD_SEC,
+  seamCrossfades,
+  loopCloseSec,
+  LOOP_CLOSE_SEC,
   type ColdSeamTransition,
 } from "../cut";
 import type { ColorRenderPlan } from "../color";
@@ -81,7 +85,8 @@ describe("buildCutArgs", () => {
     );
     const graph = jump[jump.indexOf("-filter_complex") + 1];
     expect(graph).toContain("[0:1]trim=start=0.000:end=2.000");
-    expect(graph).toContain("[0:2]atrim=start=0.000:end=2.000");
+    // 音频尾多读半条拼缝交叠(SEAM_LEAD_SEC,尾巴让给画面=L-cut),由 acrossfade 抵掉。
+    expect(graph).toContain(`[0:2]atrim=start=0.000:end=${(2 + SEAM_LEAD_SEC).toFixed(3)}`);
   });
 
   it("copy mode: stream copy, no encoder flags", () => {
@@ -355,19 +360,19 @@ describe("loudness normalization", () => {
     const segs = [{ startSec: 10, endSec: 12 }, { startSec: 15, endSec: 17 }];
     const args = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 10, segs, { normalizeLoudness: true });
     const fc = args[args.indexOf("-filter_complex") + 1];
-    expect(fc).toContain(":a=1[vout][araw]"); // concat audio → raw label
+    expect(fc).toContain(":c2=qsin[araw]"); // 拼接后的声音 → raw label
     expect(fc).toContain(`[araw]${LOUDNORM_FILTER}[aout]`); // then normalize
     expect(args[args.indexOf("-map") + 1]).toBe("[vout]");
     expect(args).toContain("[aout]"); // final audio map unchanged
     expect(args[args.indexOf("-ar") + 1]).toBe(LOUDNORM_OUT_RATE); // cap the 192kHz output
   });
 
-  it("jump cut: concat maps straight to [aout] when disabled", () => {
+  it("jump cut: the spliced audio maps straight to [aout] when disabled", () => {
     const segs = [{ startSec: 10, endSec: 12 }, { startSec: 15, endSec: 17 }];
     const fc = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 10, segs)[
       buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 10, segs).indexOf("-filter_complex") + 1
     ];
-    expect(fc).toContain(":a=1[vout][aout]");
+    expect(fc).toContain(":c2=qsin[aout]");
     expect(fc).not.toContain("loudnorm");
   });
 });
@@ -396,7 +401,7 @@ describe("denoise (基础降噪)", () => {
     const segs = [{ startSec: 10, endSec: 12 }, { startSec: 15, endSec: 17 }];
     const args = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 10, segs, { denoise: true, normalizeLoudness: true });
     const fc = args[args.indexOf("-filter_complex") + 1];
-    expect(fc).toContain(":a=1[vout][araw]");
+    expect(fc).toContain(":c2=qsin[araw]");
     expect(fc).toContain(`[araw]${DENOISE_FILTER},${LOUDNORM_FILTER}[aout]`);
   });
 
@@ -436,15 +441,72 @@ describe("edgeFadeFilters (切点边缘 30ms 淡化防爆音)", () => {
     expect(args.join(" ")).not.toContain("afade");
   });
 
-  it("跳剪:每段两端各自淡化,拼缝处淡出+淡入相接", () => {
+  it("跳剪:拼缝交给纯音频交叉淡化(画面仍硬切),两端各留 30ms 淡", () => {
     const segs = [{ startSec: 10, endSec: 12 }, { startSec: 15, endSec: 17 }];
     const args = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 10, segs);
     const fc = args[args.indexOf("-filter_complex") + 1];
-    // 两段各带一对淡化(2 段 × in/out)
-    expect(fc.match(/afade=t=in/g)).toHaveLength(2);
-    expect(fc.match(/afade=t=out/g)).toHaveLength(2);
-    // 淡化挂在 asetpts 之后、进 concat 之前(段内相对时间轴)
-    expect(fc).toContain(`asetpts=PTS-STARTPTS,afade=t=in:st=0:d=${EDGE_FADE_SEC},afade=t=out:st=1.970:d=${EDGE_FADE_SEC}[a0]`);
+    // 画面:纯视频 concat,硬切不变。
+    expect(fc).toContain("[v0][v1]concat=n=2:v=1:a=0[vout]");
+    // 声音:以画面切点为中心的交叠——前段尾巴多走 SEAM_LEAD_SEC(L-cut),后段
+    // 早进 SEAM_LEAD_SEC(J-cut,读的是被切掉的静音);两端淡只留最外。
+    expect(fc).toContain(`[0:a:0]atrim=start=0.000:end=${(2 + SEAM_LEAD_SEC).toFixed(3)}`);
+    expect(fc).toContain(`[0:a:0]atrim=start=${(5 - SEAM_LEAD_SEC).toFixed(3)}:end=7.000`);
+    expect(fc.match(/afade=t=in/g)).toHaveLength(1);
+    expect(fc.match(/afade=t=out/g)).toHaveLength(1);
+    expect(fc).toContain(`asetpts=PTS-STARTPTS,afade=t=in:st=0:d=${EDGE_FADE_SEC}[a0]`);
+    // 等功率 acrossfade,长度 = 画面总长(2+2):各段多读的 seam 被交叠吃掉。
+    expect(fc).toContain(`acrossfade=d=${(SEAM_LEAD_SEC * 2).toFixed(3)}:c1=qsin:c2=qsin[aout]`);
+  });
+
+  it("seamCrossfades:逐条拼缝取静音长度,不吃进真人声", () => {
+    // 静音 0.5s → 交叠用满 2×SEAM_LEAD_SEC(单边各半步)。
+    expect(seamCrossfades([{ startSec: 0, endSec: 2 }, { startSec: 2.5, endSec: 4 }])).toEqual([SEAM_LEAD_SEC * 2]);
+    // 拼缝静音只剩 0.03s → 单边只能拿 0.03(总长 0.06);下一条 0.5s 的照旧用满。
+    expect(
+      seamCrossfades([{ startSec: 0, endSec: 2 }, { startSec: 2.5, endSec: 4 }, { startSec: 4.03, endSec: 6 }])
+    ).toEqual([SEAM_LEAD_SEC * 2, 0.06]);
+    // 单段没有拼缝;重叠段(负静音)、几乎为零的静音(节奏切)都不淡。
+    expect(seamCrossfades([{ startSec: 0, endSec: 2 }])).toEqual([]);
+    expect(seamCrossfades([{ startSec: 0, endSec: 2 }, { startSec: 1.9, endSec: 4 }])).toEqual([0]);
+    expect(seamCrossfades([{ startSec: 0, endSec: 2 }, { startSec: 2, endSec: 4 }])).toEqual([0]);
+    // 段本身太短 → 单边量按「不超过该段一半」缩水(0.1s 的段只能让 0.05s)。
+    expect(seamCrossfades([{ startSec: 0, endSec: 0.1 }, { startSec: 1, endSec: 4 }])).toEqual([0.1]);
+  });
+
+  it("跳剪:拼缝没有静音可借时退回硬接(画面声音一起 concat)", () => {
+    const tight = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 10, [
+      { startSec: 10, endSec: 12 },
+      { startSec: 12.01, endSec: 14 },
+    ]);
+    const fc = tight[tight.indexOf("-filter_complex") + 1];
+    expect(fc).not.toContain("acrossfade");
+    expect(fc).toContain("concat=n=2:v=1:a=1");
+    // 剪掉的只有 10ms 静音,两端各留一个 30ms 淡就够了。
+    expect(fc.match(/afade=t=in/g)).toHaveLength(1);
+    expect(fc.match(/afade=t=out/g)).toHaveLength(1);
+  });
+
+  it("跳剪:节奏切(前后同一段连续声音)不交叠,也不在接缝上凹一刀", () => {
+    // 一段话被对半切开 → 拼缝零静音:整条退回硬接,内层不叠淡,只有最外两端淡。
+    const split = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 0, [
+      { startSec: 0, endSec: 4 },
+      { startSec: 4, endSec: 8 },
+    ]);
+    const fc = split[split.indexOf("-filter_complex") + 1];
+    expect(fc).toContain("concat=n=2:v=1:a=1");
+    expect(fc.match(/afade=t=in/g)).toHaveLength(1);
+    expect(fc.match(/afade=t=out/g)).toHaveLength(1);
+    // 真静音拼缝 + 节奏拼缝混在一起:前者交叠,后者直接接(逐条独立)。
+    const mixed = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 0, [
+      { startSec: 0, endSec: 4 },
+      { startSec: 5, endSec: 9 },
+      { startSec: 9, endSec: 13 },
+    ]);
+    const mfc = mixed[mixed.indexOf("-filter_complex") + 1];
+    expect(mfc).toContain(`[a0][a1]acrossfade=d=${(SEAM_LEAD_SEC * 2).toFixed(3)}:c1=qsin:c2=qsin[as1]`);
+    expect(mfc).toContain("[as1][a2]concat=n=2:v=0:a=1[aout]");
+    expect(mfc.match(/afade=t=in/g)).toHaveLength(1);
+    expect(mfc.match(/afade=t=out/g)).toHaveLength(1);
   });
 
   it("交叉淡化:等功率 acrossfade,且接缝内部不再叠首尾淡", () => {
@@ -513,6 +575,15 @@ describe("横屏运镜(autoZoom 输出源帧尺寸)", () => {
   it("竖屏 + 源帧几何冲突时按调用方给的走(宽度偶数化)", () => {
     const filters = buildVideoFilters({ autoZoom: { durationSec: 5, fps: 30, outW: 1919, outH: 1079 } });
     expect(filters.join(",")).toContain("s=1918x1078");
+  });
+
+  it("punchOnly:只推强调点,不做呼吸(节奏兜底不抢戏)", () => {
+    const filters = buildVideoFilters({
+      autoZoom: { durationSec: 20, fps: 30, emphasisAtSec: [5, 10, 15], punchOnly: true },
+    });
+    const z = /zoompan=z='([^']*)'/.exec(filters.join(","))?.[1] ?? "";
+    expect(z).toContain("1.0600"); // 推近幅度取呼吸峰值
+    expect(z).not.toContain("1.1000"); // 不是强调级别(那是 1.1,抢戏)
   });
 });
 
@@ -641,5 +712,98 @@ describe("运镜超采样(zoompan/crop 的位置量化)", () => {
     }).join(",");
     expect(joined).not.toContain("scale=iw*");
     expect(joined).not.toContain("zoompan=");
+  });
+});
+
+describe("环形收口(loop closure)", () => {
+  it("收口长度:太短的片子不做,能做的也不吃超过四分之一", () => {
+    expect(loopCloseSec(10)).toBe(0); // 没请求
+    expect(loopCloseSec(10, 0)).toBe(0);
+    expect(loopCloseSec(10, Infinity)).toBe(1); // 病态请求被上限夹住,不炸
+    expect(loopCloseSec(10, LOOP_CLOSE_SEC)).toBe(0.3);
+    expect(loopCloseSec(0.6, LOOP_CLOSE_SEC)).toBe(0); // 不足 1 秒的成片不收口
+    expect(loopCloseSec(0.9, LOOP_CLOSE_SEC)).toBe(0);
+    expect(loopCloseSec(1, LOOP_CLOSE_SEC)).toBe(0.25); // 恰好 1 秒 → 只吃四分之一
+    expect(loopCloseSec(10, 5)).toBe(1); // 上限 1 秒
+    expect(loopCloseSec(2.5, 5)).toBe(0.625); // 长上限被「片长/4」压住
+  });
+
+  it("单段成片:开头倒放融回第一帧,声音等功率融合,总长不变", () => {
+    const args = buildCutArgs("/v/in.mp4", "/v/out.mp4", 0, 10, { loopCloseSec: LOOP_CLOSE_SEC });
+    // 跨路取同一段音频(要再把开头叠到末尾)只能走 filter_complex,不再有 -vf/-af
+    expect(args).not.toContain("-vf");
+    expect(args).not.toContain("-af");
+    const graph = args[args.indexOf("-filter_complex") + 1];
+    // 偏移量 = 片长 − 收口;倒放的是**开头**那 0.3 秒,走到终点 = 原片第 0 帧
+    expect(graph).toBe(
+      "[0:v:0]null,split[zl0][zl1];[zl1]trim=end=0.300,setpts=PTS-STARTPTS,reverse[zl2];" +
+        "[zl0][zl2]xfade=transition=fade:duration=0.300:offset=9.700[vout];" +
+        "[0:a:0]afade=t=in:st=0:d=0.03,afade=t=out:st=9.970:d=0.03,asplit=3[za0][za1][za2];" +
+        "[za0]atrim=end=9.700,asetpts=PTS-STARTPTS[zb];" +
+        "[za1]atrim=start=9.700:end=10.000,asetpts=PTS-STARTPTS,afade=t=out:st=0:d=0.300:curve=qsin[zt];" +
+        "[za2]atrim=end=0.300,asetpts=PTS-STARTPTS,areverse,afade=t=in:st=0:d=0.300:curve=qsin[zh];" +
+        "[zt][zh]amix=inputs=2:duration=longest:normalize=0[zm];" +
+        "[zb][zm]concat=n=2:v=0:a=1[aout]"
+    );
+    // 声音跟画面同构:开头也倒放,末样本正好是源片第 0 个样本,重播回开头没有爆点
+    expect(graph).toContain("asetpts=PTS-STARTPTS,areverse,afade=t=in");
+    // 不用 acrossfade:它按绝对 PTS 对齐,「长段 + 短段」会把声音削成 0.03 秒
+    expect(graph).not.toContain("acrossfade");
+    expect(args[args.indexOf("-map") + 1]).toBe("[vout]");
+    expect(args[args.indexOf("-map", args.indexOf("-map") + 1) + 1]).toBe("[aout]");
+    // 重编码路径:收口重排像素,别想走 -c:v copy
+    expect(args).toContain("-c:v");
+    expect(args).not.toContain("copy");
+  });
+
+  it("收口与字幕/水印同路:文字链整条搬进 filter_complex", () => {
+    const args = buildCutArgs("/v/in.mp4", "/v/out.mp4", 0, 8, {
+      subtitlePath: "/tmp/a.ass",
+      loopCloseSec: LOOP_CLOSE_SEC,
+    });
+    const graph = args[args.indexOf("-filter_complex") + 1];
+    expect(graph).toContain("[0:v:0]subtitles=filename='/tmp/a.ass',split[zl0][zl1]");
+    expect(graph).toContain("xfade=transition=fade:duration=0.300:offset=7.700");
+  });
+
+  it("不请求收口时一个字节都不变(旧路径原样)", () => {
+    const plain = buildCutArgs("/v/in.mp4", "/v/out.mp4", 0, 10, {});
+    expect(plain).toContain("-af");
+    expect(plain.join(" ")).not.toContain("split[zl0]");
+    const short = buildCutArgs("/v/in.mp4", "/v/out.mp4", 0, 0.6, { loopCloseSec: LOOP_CLOSE_SEC });
+    expect(short.join(" ")).not.toContain("split[zl0]");
+  });
+
+  it("跳剪成片:收口接在字幕/水印/音频链之后,偏移量按拼接后的总长算", () => {
+    const args = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 0, [
+      { startSec: 0, endSec: 4 },
+      { startSec: 5, endSec: 9 },
+    ], { loopCloseSec: LOOP_CLOSE_SEC });
+    const graph = args[args.indexOf("-filter_complex") + 1];
+    expect(graph).toContain("[vout]split[zl0][zl1];[zl1]trim=end=0.300");
+    expect(graph).toContain("xfade=transition=fade:duration=0.300:offset=7.700[vloop]");
+    expect(graph).toContain("[aout]asplit=3[za0][za1][za2];[za0]atrim=end=7.700");
+    expect(graph).toContain("amix=inputs=2:duration=longest:normalize=0[zm];[zb][zm]concat=n=2:v=0:a=1[aloop]");
+    expect(args[args.indexOf("-map") + 1]).toBe("[vloop]");
+    expect(args[args.indexOf("-map", args.indexOf("-map") + 1) + 1]).toBe("[aloop]");
+  });
+
+  it("跳剪 + 交叉淡化:偏移量扣掉交叠,收口仍落在成片尾端", () => {
+    const args = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 0, [
+      { startSec: 0, endSec: 4 },
+      { startSec: 5, endSec: 9 },
+    ], { transitionSec: 0.4, loopCloseSec: LOOP_CLOSE_SEC });
+    const graph = args[args.indexOf("-filter_complex") + 1];
+    // 8 − 0.4 = 7.6 → 偏移 7.300
+    expect(graph).toContain("xfade=transition=fade:duration=0.300:offset=7.300[vloop]");
+  });
+
+  it("跳剪不请求收口:映到 [vout]/[aout](旧图原样)", () => {
+    const args = buildJumpCutArgs("/v/in.mp4", "/v/out.mp4", 0, [
+      { startSec: 0, endSec: 4 },
+      { startSec: 5, endSec: 9 },
+    ]);
+    expect(args[args.indexOf("-map") + 1]).toBe("[vout]");
+    expect(args.join(" ")).not.toContain("[vloop]");
   });
 });

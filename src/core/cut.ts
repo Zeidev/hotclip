@@ -15,7 +15,9 @@ import { writeFile } from "fs/promises";
 import { resolve } from "path";
 import { resolveFfmpegPath } from "./binaries";
 import { toFfmpegTime } from "./time";
-import { buildZoomFilter, zoomSupersampleFactor, zoomSupersampleStage } from "./autozoom";
+import { buildZoomFilter, zoomSupersampleFactor, zoomSupersampleStage, ZOOM_BASE, ZOOM_BREATH } from "./autozoom";
+import { blurFillStage, planFill, type FillMode } from "./fill";
+import { speedAudioStage, speedVideoStage } from "./speed-ramp";
 import { colorOutputArgs, hdrToneMapFilter, type ColorRenderPlan } from "./color";
 import { ffmpegAudioStreamSpecifier, ffmpegVideoStreamSpecifier } from "./probe";
 import { videoEncoderArgs, type VideoEncoder } from "./video-encoder";
@@ -85,6 +87,12 @@ export interface AutoZoomSpec {
   fps: number;
   emphasisAtSec?: number[];
   punchTo?: number;
+  /**
+   * 只做强调推近、不做呼吸(节奏兜底用,见 qa.ts pacingPunchPoints):整片没有
+   * 字幕/运镜这些持续视觉变化时,在超长的静止窗中点插一次轻推近。推近幅度取
+   * 呼吸的峰值而不是强调的 1.1——它是补节奏,不是抢戏。
+   */
+  punchOnly?: boolean;
   /** 运镜输出宽度;缺省 1080(竖屏出口的目标宽)。 */
   outW?: number;
   /** 运镜输出高度;缺省 1920(竖屏出口的目标高)。 */
@@ -118,6 +126,11 @@ export interface CutOptions {
   trackPlan?: { cropXExpr: string; cropW: number; cropH: number; cropY: number };
   /** Reframe to 9:16 vertical (center crop → 1080×1920). Requires re-encode. */
   vertical?: boolean;
+  /**
+   * 竖屏重构时空出来的边怎么处理:`crop`(缺省,居中裁掉两侧)或 `blur`
+   * (整帧缩到宽度居中,底下垫模糊放大版)。需要 srcW/srcH 判画幅(见 fill.ts)。
+   */
+  fillMode?: FillMode;
   /**
    * 自动运镜:成片叠一层缓慢推拉(见 autozoom.ts)。需要源帧率——
    * zoompan 不传 fps 会把素材重采样到 25fps。字段齐全才生效。
@@ -163,12 +176,159 @@ export interface CutOptions {
    * One entry per segment (null = leave it alone). Empty/absent changes nothing.
    */
   pieceGrade?: Array<PieceColorGrade | null>;
+  /**
+   * 环形收口的长度(秒,见 loopCloseSec)。0/缺省 = 不做,成片与历史逐字节一致。
+   * 只对「从头播到尾」的成片成立——冷开场/爆点前置会在正片前接一段迷你片,
+   * 那时成片的第一帧不是正片的第一帧,收口会收错地方。
+   */
+  loopCloseSec?: number;
+  /**
+   * 变速倍率(见 speed-ramp.ts):画面 setpts 放在滤镜链最末尾(字幕烧完之后,
+   * 字幕跟着画面一起快),声音 atempo 放在音频链末尾(保音高)。倍率 1 或缺省
+   * = 不变速,链路逐字节不变。环形收口按源时长倒放,两者不能同时生效。
+   */
+  speedRate?: number;
   /** 容器元数据(如 AIGC 隐式标识);copy 模式同样写入。 */
   metadata?: Record<string, string>;
 }
 
 /** Alternate jump-cut pieces push in by this factor (4% reads as a re-take). */
 export const PUNCH_IN_SCALE = 1.04;
+
+/**
+ * 跳剪拼缝处音频交叠的**单边**提前/延后量(秒)。
+ *
+ * 画面照旧硬切(跳剪的意义所在),声音跨过拼缝做一次**以画面切点为中心**的等功率
+ * 交叠:前段声音多走 lead 秒(画面已经切了、声音还在 = L-cut),后段声音早进 lead
+ * 秒(声音先起、画面还没切 = J-cut)。交叠总长 = 2×lead,两头读的都是被切掉的那段
+ * 静音,所以总长仍等于画面总长,字词/字幕的时间轴一个点都不动(内容映射不变,
+ * 交叠只改电平包络)。
+ *
+ * 为什么够得着 150ms:前段让出的那半段是它自己的尾音 + 呼吸口,后段提前的那半段
+ * 全落在被删掉的静音里,两边「有声的部分」在交叠窗里只是擦肩——前段尾音先淡出、
+ * 后段起音后淡入,不会叠成两句话同时在说。
+ */
+export const SEAM_LEAD_SEC = 0.15;
+
+/**
+ * 每条拼缝的交叠长度(0 = 这条拼缝不交叠)。交叠靠「多读被切掉的那段静音」
+ * 换来的,所以最多只有那条静音那么长;静音几乎为零(节奏切把一段话对半切,
+ * 前后本就连续)或任一段太短(会被交叠吃掉)时就别淡。逐条独立:一条拼缝
+ * 淡不了,不该把别的拼缝也拖成硬接。
+ */
+export function seamCrossfades(
+  segments: Array<{ startSec: number; endSec: number }>,
+  leadSec: number = SEAM_LEAD_SEC
+): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < segments.length - 1; i++) {
+    const gap = segments[i + 1].startSec - segments[i].endSec;
+    const prevLen = segments[i].endSec - segments[i].startSec;
+    const nextLen = segments[i + 1].endSec - segments[i + 1].startSec;
+    // 单边量:不能超过那条静音(前后两头读的都在这段里),也不能超过任一段的
+    // 一半(交叠吃掉整段,拼缝就没有干净的声音了)
+    const lead = Math.max(0, Math.min(leadSec, gap, prevLen / 2, nextLen / 2));
+    const rounded = Math.floor(lead * 2 * 1000) / 1000;
+    out.push(rounded >= 0.02 ? rounded : 0);
+  }
+  return out;
+}
+
+/**
+ * 环形收口的默认长度:最后这么多秒折回开头那一帧。选段时 AI 评审已经判定过
+ * 「最后一句绕回第一句」(candidate.loop),但那个标记此前只参与排序加分,成片
+ * 本身照旧硬邦邦地停在最后一个音节上——重播时就是一次「跳回开头」。收口把这
+ * 0.3 秒接起来:观众看到的是结尾融进了开头,而不是一个切点。
+ */
+export const LOOP_CLOSE_SEC = 0.3;
+
+/** 收口长度上限——再长就不是收口,是把整条片子倒放了一遍。 */
+const LOOP_CLOSE_MAX_SEC = 1;
+/** 短过这个长度就不值得收口:那不是片子,是一次闪。 */
+const MIN_LOOP_CLOSE_DURATION_SEC = 1;
+/** 收口自身的最短长度:再短就是一次闪,不是融合。 */
+const MIN_LOOP_CLOSE_SEC = 0.12;
+
+/**
+ * 实际做的收口长度(秒);0 = 不做。成片至少要 1 秒,收口最多吃片长的四分之一
+ * (片长 1 秒时收口缩到 0.25 秒),短到 0.12 秒以下干脆不做——那不是收口,是闪
+ * 一下。纯函数,判据与渲染无关,测试直接断言。
+ */
+export function loopCloseSec(durationSec: number, requested?: number): number {
+  const want = Math.min(requested ?? 0, LOOP_CLOSE_MAX_SEC);
+  if (!(want > 0) || !Number.isFinite(want)) return 0;
+  if (!(durationSec >= MIN_LOOP_CLOSE_DURATION_SEC)) return 0;
+  const sec = Math.min(want, durationSec / 4);
+  return Number((sec >= MIN_LOOP_CLOSE_SEC ? sec : 0).toFixed(3));
+}
+
+/**
+ * 环形收口的画面段(纯函数)。`inLabel` 为空 = 接在调用方那条链后面(逗号延续),
+ * 否则从 `[inLabel]` 起新链;`outLabel` 是收口后的输出标签。
+ *
+ * 做法:把成片一分为二,取**开头**那 L 秒倒放,叠到末尾与正片交叉淡化,偏移量
+ * 落在「片长 − L」。倒放的开头走到终点正好是原片第 0 帧,所以成片最后一帧就是
+ * 第一帧(收口判据「首末帧相似度」= 1),而总长一帧不变——重播时接缝在肉眼上
+ * 不存在,只是一次 L 秒的融合。倒放只倒帧序,画面内容照旧,字幕/水印跟着平稳过渡。
+ *
+ * 倒的是**开头**不是结尾:倒结尾的话,倒放段走到终点是「结尾的第一帧」,收口
+ * 只是把片尾又演了一遍,最后一帧还不是第一帧(第一版就是这么写错的,探针量出来
+ * 首末帧差异 4.28 > 不做的 1.91 才发现)。
+ */
+export function loopCloseVideoStage(
+  inLabel: string,
+  outLabel: string,
+  durationSec: number,
+  closeSec: number
+): string {
+  const offset = Math.max(0, durationSec - closeSec).toFixed(3);
+  const head = inLabel === "" ? "split" : `${inLabel}split`;
+  return (
+    `${head}[zl0][zl1];` +
+    // trim 只取开头 L 秒再倒放:reverse 要把整段读进内存,不先裁就把成片全缓存一遍
+    `[zl1]trim=end=${closeSec.toFixed(3)},setpts=PTS-STARTPTS,reverse[zl2];` +
+    `[zl0][zl2]xfade=transition=fade:duration=${closeSec.toFixed(3)}:offset=${offset}${outLabel}`
+  );
+}
+
+/**
+ * 环形收口的声音段(纯函数),与画面段同构:把成片一分为二,取**开头** L 秒倒放
+ * 叠到末尾与正片等功率交叉淡化,总长一秒不差地等于 `durationSec`,末样本正好落
+ * 在源片第 0 个样本上(重播回到开头是样本连续的,没有接缝爆点)。
+ *
+ * 声音也倒放:画面那 L 秒本来就是倒着走的(见 loopCloseVideoStage),声音跟着倒
+ * 才对得上口型,听感是一次有意的「倒带」;不倒放的话收口只能融进开头那 L 秒的
+ * **正向**声音,结尾停在源片第 L 秒,重播回第 0 秒就是一次爆点。倒放段只回卷
+ * 开头 L 秒,不是整句人声倒着念。
+ *
+ * 这里不用 acrossfade:它按输入的绝对 PTS 对齐,输出长度取决于两段的相对长短
+ * (实测 A=6s + B=0.3s → 0.03s,B=3s → 2.74s),收口这种「一段很长 + 一段很
+ * 短」的形状会直接把声音削没。所以自己搭:x 取片头正片 → 淡出的片尾 + 淡入的
+ * 倒放片头 → 等功率混音(长度 L)→ 拼回片头。
+ * (qsin:两段不同时刻的人声互不相关,线性淡化会在交叠处掉 ~3dB;`normalize=0`
+ * 因为淡入淡出本就互补,amix 默认再除 2 会把整段压低一半。)
+ */
+export function loopCloseAudioStage(
+  inLabel: string,
+  outLabel: string,
+  durationSec: number,
+  closeSec: number
+): string {
+  const close = closeSec.toFixed(3);
+  const offset = Math.max(0, durationSec - closeSec).toFixed(3);
+  const head = inLabel === "" ? "asplit=3" : `${inLabel}asplit=3`;
+  return (
+    `${head}[za0][za1][za2];` +
+    // 片头正片:收口区之前的部分,原样保留
+    `[za0]atrim=end=${offset},asetpts=PTS-STARTPTS[zb];` +
+    // 片尾:等功率淡出
+    `[za1]atrim=start=${offset}:end=${durationSec.toFixed(3)},asetpts=PTS-STARTPTS,afade=t=out:st=0:d=${close}:curve=qsin[zt];` +
+    // 片头 L 秒倒放:等功率淡入,走到终点即源片第 0 个样本
+    `[za2]atrim=end=${close},asetpts=PTS-STARTPTS,areverse,afade=t=in:st=0:d=${close}:curve=qsin[zh];` +
+    `[zt][zh]amix=inputs=2:duration=longest:normalize=0[zm];` +
+    `[zb][zm]concat=n=2:v=0:a=1${outLabel}`
+  );
+}
 
 /**
  * yuv420p needs even dimensions; concat needs all pieces identical. Round DOWN
@@ -327,6 +487,7 @@ export function buildVideoFilters(options: CutOptions): string[] {
     ? buildZoomFilter(az.durationSec, az.fps, zoomW, zoomH, {
         emphasisAtSec: az.emphasisAtSec,
         punchTo: az.punchTo,
+        ...(az.punchOnly ? { breathZoom: ZOOM_BASE, emphasisZoom: ZOOM_BREATH } : {}),
       })
     : null;
   // 运镜的位置量化只到「色度网格」:zoompan 的窗口坐标取整后按 2 像素对齐,
@@ -369,6 +530,8 @@ export function buildVideoFilters(options: CutOptions): string[] {
       const fonts = options.fontsDir ? `:fontsdir='${escapeFilterPath(options.fontsDir)}'` : "";
       filters.push(`subtitles=filename='${escapeFilterPath(options.subtitlePath)}'${fonts}`);
     }
+    const speedStage = speedVideoStage(options.speedRate);
+    if (speedStage) filters.push(speedStage);
     return filters;
   }
   const ui = options.uiCrop;
@@ -377,7 +540,21 @@ export function buildVideoFilters(options: CutOptions): string[] {
     const keep = Math.max(0.2, 1 - ui.topFrac - ui.bottomFrac);
     filters.push(`crop=w=iw:h='floor(ih*${keep.toFixed(4)}/2)*2':x=0:y='floor(ih*${ui.topFrac.toFixed(4)}/2)*2'`);
   }
-  if (options.vertical) {
+  const fill = planFill({
+    mode: options.fillMode,
+    vertical: Boolean(options.vertical),
+    hasTrack: Boolean(track),
+    hasZoom: Boolean(zoom),
+    srcW: options.srcW,
+    srcH: options.srcH,
+    outW: zoomW,
+    outH: zoomH,
+  });
+  if (options.vertical && fill === "blur") {
+    // 模糊填边:整帧缩到宽度居中,底下垫一层放大裁满的模糊压暗版(见 fill.ts)。
+    // 不走居中裁剪,所以那一步的尺寸表达式和超采样都不需要。
+    filters.push(blurFillStage(zoomW, zoomH));
+  } else if (options.vertical) {
     // Center crop to exactly 9:16 (whichever axis binds), then normalize size.
     // 居中裁剪的尺寸是动态表达式,超采样用不太精确的那份估算(只是像素预算)。
     filters.push(
@@ -395,6 +572,9 @@ export function buildVideoFilters(options: CutOptions): string[] {
     const fonts = options.fontsDir ? `:fontsdir='${escapeFilterPath(options.fontsDir)}'` : "";
     filters.push(`subtitles=filename='${escapeFilterPath(options.subtitlePath)}'${fonts}`);
   }
+  // 变速:放最末尾,字幕按源时间烧完再整体压缩时间戳
+  const speed = speedVideoStage(options.speedRate);
+  if (speed) filters.push(speed);
   return filters;
 }
 
@@ -410,20 +590,34 @@ export function buildCutArgs(
     throw new Error(`invalid cut range: start=${startSec} end=${endSec}`);
   }
   const filters = buildVideoFilters(options);
+  const start = Math.max(0, startSec);
+  const duration = endSec - start;
+  // 环形收口要重排尾段画面并跨路取音频,所以它自己也强制重编码。
+  const loop = loopCloseSec(duration, options.loopCloseSec);
+  // 收口按源时长倒放尾段,变速会改掉时长——两者同时出现是调用方的错,
+  // 与其出一版接错的片子,不如当场报错(调用方有回退路径)
+  if (loop > 0 && speedVideoStage(options.speedRate)) {
+    throw new Error("speedRate cannot be combined with loopCloseSec");
+  }
   // Any video filter — or an audio filter (loudnorm/denoise) — forces a
   // re-encode, so silently upgrade copy → accurate.
   const mode =
-    filters.length > 0 || options.watermark || options.normalizeLoudness || options.denoise
+    filters.length > 0 || options.watermark || options.normalizeLoudness || options.denoise || loop > 0
       ? "accurate"
       : (options.mode ?? "accurate");
-  const start = Math.max(0, startSec);
-  const duration = endSec - start;
 
   // Fast seek: -ss BEFORE -i jumps by keyframe index (instant even at hour 3
   // of a VOD); the decoder then trims precisely inside the segment. Input
   // seeking also resets PTS to ~0, which is exactly what the clip-relative
   // ASS karaoke timestamps assume.
-  const common = ["-hide_banner", "-y", "-ss", toFfmpegTime(start), "-i", inputPath, "-t", toFfmpegTime(duration)];
+  // 变速时 `-t` 必须量**源时间**,所以挪到 `-i` 前面(输入侧:最多读多少源)。
+  // 放在输出侧量的是输出时间:setpts 把时间戳压扁后,ffmpeg 要读到输出时间走完
+  // 整个切片才收手,实际多吃 `时长 × 倍率` 的源——3 秒的迷你片会变成 4.2 秒的
+  // 内容压成 3 秒,计划时长/字幕/交叠全对不上。`-ss` 仍是输入侧定位(关键帧跳
+  // 转),两者合起来就是「从 start 起读 duration 秒源」。
+  const common = speedVideoStage(options.speedRate)
+    ? ["-hide_banner", "-y", "-ss", toFfmpegTime(start), "-t", toFfmpegTime(duration), "-i", inputPath]
+    : ["-hide_banner", "-y", "-ss", toFfmpegTime(start), "-i", inputPath, "-t", toFfmpegTime(duration)];
   const maps = [
     "-map", ffmpegVideoStreamSpecifier(options.videoStreamIndex),
     "-map", ffmpegAudioStreamSpecifier(options.audioStreamIndex, 0, true),
@@ -438,12 +632,41 @@ export function buildCutArgs(
   const copyVideo = Boolean(options.videoCopy && filters.length === 0 && !options.watermark);
   // 音频链固定顺序:降噪 → 响度标准化(loudnorm 必须看到去噪后的音频)
   // → 边缘淡化(放最后,loudnorm 的动态增益才不会把淡化抬回去)
+  const speedAudio = speedAudioStage(options.speedRate);
   const audioChain = [
     ...(options.denoise ? [DENOISE_FILTER] : []),
     ...(options.normalizeLoudness ? [LOUDNORM_FILTER] : []),
     ...muteRangeFilters(options.muteRanges),
     ...edgeFadeFilters(duration),
+    // 变速放最后:淡入淡出按源时间做完,再连画面一起压缩时间轴
+    ...(speedAudio ? [speedAudio] : []),
   ];
+  // 环形收口:画面倒放融回第一帧,声音等功率融合。尾段倒放要求「同一条流取两
+  // 支」,线性 -vf/-af 里没有跨路输入,所以这一条整体走 filter_complex——视频
+  // 链照抄 -vf 的那串(含水印的 movie 源),音频链照抄 -af 的那串。
+  if (loop > 0) {
+    const vChain = filters.length > 0 || options.watermark ? composeVideoFilter(filters, options.watermark) : "null";
+    const aChain = audioChain.length > 0 ? audioChain.join(",") : "anull";
+    return [
+      ...common,
+      "-filter_complex",
+      [
+        `[${ffmpegVideoStreamSpecifier(options.videoStreamIndex)}]${vChain},${loopCloseVideoStage("", "[vout]", duration, loop)}`,
+        `[${ffmpegAudioStreamSpecifier(options.audioStreamIndex)}]${aChain},${loopCloseAudioStage("", "[aout]", duration, loop)}`,
+      ].join(";"),
+      "-map", "[vout]",
+      "-map", "[aout]",
+      ...videoEncoderArgs(options.encoder ?? "libx264", Number(crf), preset),
+      "-pix_fmt", "yuv420p",
+      ...(options.color ? colorOutputArgs(options.color) : []),
+      ...(options.normalizeLoudness ? ["-ar", LOUDNORM_OUT_RATE] : []),
+      "-c:a", "aac",
+      "-b:a", "192k",
+      "-movflags", "+faststart",
+      ...metadataArgs(options.metadata),
+      outputPath,
+    ];
+  }
   return [
     ...common,
     ...maps,
@@ -476,6 +699,12 @@ export function buildJumpCutArgs(
   options: CutOptions = {}
 ): string[] {
   if (segments.length === 0) throw new Error("jump cut requires at least one segment");
+  // 跳切自己拼时间轴(逐段 trim + concat + 交叠),变速的 setpts 没有落点;而且
+  // 计划时长/字幕/运镜都按变速前的秒数算过。与其出一版速度没变的片子(静默
+  // 丢弃),不如当场报错——调用方有回退路径。
+  if (speedVideoStage(options.speedRate)) {
+    throw new Error("speedRate is not supported by jump cuts");
+  }
   // 首段可能被「补进静音」拉到切片起点之前(见 gaps.snapOuterEdgesToQuiet):
   // seek 取两者较小值,否则首个 trim 的 start 被夹到 0、补静音的那一段被悄悄
   // 丢掉,成片比计划短一截,字幕/运镜/时长全部对不上。
@@ -484,11 +713,17 @@ export function buildJumpCutArgs(
   const readDuration = lastEnd - seek + 0.5; // small margin past the tail
 
   const parts: string[] = [];
-  const labels: string[] = [];
+  const videoLabels: string[] = [];
+  const audioLabels: string[] = [];
   const videoInput = ffmpegVideoStreamSpecifier(options.videoStreamIndex);
   const audioInput = ffmpegAudioStreamSpecifier(options.audioStreamIndex);
   const transition = Math.max(0, Math.min(options.transitionSec ?? 0, 0.5));
   const crossfading = transition > 0 && segments.length > 1;
+  // 纯音频拼缝淡化仅在硬切路径上做:交叉淡化时画面本身已经交叠,acrossfade
+  // 已经包住接缝。
+  const seams = crossfading ? [] : seamCrossfades(segments);
+  const durations = segments.map((s) => Math.max(0, s.endSec - s.startSec));
+  const anySeam = seams.some((s) => s > 0);
   const punch = options.punchIn;
   const punchW = punch ? evenFrame(punch.width) : 0;
   const punchH = punch ? evenFrame(punch.height) : 0;
@@ -514,15 +749,31 @@ export function buildJumpCutArgs(
     }
     parts.push(`[${videoInput}]${visual.join(",")}[v${i}]`);
     // 每段两端 30ms 淡化:相邻段的淡出+淡入在拼缝处相接,消掉跳剪爆音。
-    // 交叉淡化时接缝内部已由 acrossfade 包住,再叠首尾淡入淡出会在
-    // 交叠区里凹一刀(听感是「抖一下」)——只保留整条时间轴最外的两端。
-    const fades = edgeFadeFilters(
-      b - a,
-      crossfading ? { in: i === 0, out: i === segments.length - 1 } : { in: true, out: true }
-    );
+    // 但拼缝已经另有交代时不能再叠:交叠区里叠首尾淡会凹一刀(听感是「抖一下」),
+    // 而节奏切(前后本是同一段连续声音)连淡都是多余的。只在「这条拼缝既没
+    // 交叠、又真的删掉了一段声音」时,才给两侧各留 30ms。
+    const last = i === segments.length - 1;
+    const seamBefore = i === 0 ? 0 : (seams[i - 1] ?? 0);
+    const seamAfter = last ? 0 : (seams[i] ?? 0);
+    const gapBefore = i === 0 ? 0 : segments[i].startSec - segments[i - 1].endSec;
+    const gapAfter = last ? 0 : segments[i + 1].startSec - segments[i].endSec;
+    // 画面交叉淡化时接缝由 xfade 交代,内层再叠淡会在交叠区凹一刀,两侧都不淡。
+    const fades = edgeFadeFilters(b - a, {
+      in: i === 0 || (!crossfading && seamBefore === 0 && gapBefore > 0.02),
+      out: last || (!crossfading && seamAfter === 0 && gapAfter > 0.02),
+    });
     const fadeSuffix = fades.length > 0 ? `,${fades.join(",")}` : "";
-    parts.push(`[${audioInput}]atrim=start=${a.toFixed(3)}:end=${b.toFixed(3)},asetpts=PTS-STARTPTS${fadeSuffix}[a${i}]`);
-    labels.push(`[v${i}][a${i}]`);
+    // 拼缝交叠(以画面切点为中心):前段尾巴多读 seamAfter/2(L-cut:画面切了声音
+    // 还在),后段早进 seamBefore/2(J-cut:声音先起画面还没切)。两头读到的都是被
+    // 切掉的那段静音,acrossfade 再从两边各吃掉交叠总长,所以总长仍等于画面总长。
+    const leadOut = seamAfter > 0 ? seamAfter / 2 : 0;
+    const leadIn = seamBefore > 0 ? seamBefore / 2 : 0;
+    const audioStart = Math.max(0, a - leadIn);
+    parts.push(
+      `[${audioInput}]atrim=start=${audioStart.toFixed(3)}:end=${(b + leadOut).toFixed(3)},asetpts=PTS-STARTPTS${fadeSuffix}[a${i}]`
+    );
+    videoLabels.push(`[v${i}]`);
+    audioLabels.push(`[a${i}]`);
   });
   const post = buildVideoFilters(options);
   const wm = options.watermark;
@@ -538,7 +789,6 @@ export function buildJumpCutArgs(
   if (crossfading) {
     // Cross-fade chain: xfade overlaps picture, acrossfade overlaps audio, and
     // both shorten the timeline by the same amount, so they stay in sync.
-    const durations = segments.map((s) => Math.max(0, s.endSec - s.startSec));
     let videoLabel = "[v0]";
     let audioLabel = "[a0]";
     let cumulative = durations[0];
@@ -557,8 +807,28 @@ export function buildJumpCutArgs(
       audioLabel = `[ax${i}]`;
       cumulative += durations[i] - transition;
     }
+  } else if (anySeam) {
+    // 硬切画面 + 连续声音:画面走纯视频 concat,声音逐拼缝处理——有静音可借
+    // 的拼缝转 acrossfade(等功率),没有的(节奏切,前后本就连续)直接接。
+    parts.push(`${videoLabels.join("")}concat=n=${segments.length}:v=1:a=0${concatOut}`);
+    let audioLabel = audioLabels[0];
+    for (let i = 1; i < segments.length; i++) {
+      const last = i === segments.length - 1;
+      const out = last ? audioOut : `[as${i}]`;
+      const d = seams[i - 1] ?? 0;
+      parts.push(
+        d > 0
+          ? // qsin = equal-power,理由同下面的交叉淡化:线性淡化在交叠处掉 ~3dB。
+            `${audioLabel}${audioLabels[i]}acrossfade=d=${d.toFixed(3)}:c1=qsin:c2=qsin${out}`
+          : // 纯音频 concat:同一条声音被对半切开,接回去本来就连着。
+            `${audioLabel}${audioLabels[i]}concat=n=2:v=0:a=1${out}`
+      );
+      audioLabel = `[as${i}]`;
+    }
   } else {
-    parts.push(`${labels.join("")}concat=n=${segments.length}:v=1:a=1${concatOut}${audioOut}`);
+    // concat 的 v/a 输入必须逐段交替([v0][a0][v1][a1]…)。
+    const paired = segments.map((_, i) => `[v${i}][a${i}]`).join("");
+    parts.push(`${paired}concat=n=${segments.length}:v=1:a=1${concatOut}${audioOut}`);
   }
   if (wm) {
     // 水印永远最后叠(在字幕之上):后处理链 → [vmain],movie 源 → [wm],overlay 收口
@@ -572,6 +842,20 @@ export function buildJumpCutArgs(
   }
   if (audioChain.length > 0) parts.push(`[araw]${audioChain.join(",")}[aout]`);
 
+  // 环形收口接在最后(字幕/水印/音频链之后):收的是成片的第一帧与最后一帧。
+  // 拼接后的总长要按交叠扣一遍,收口的偏移量才落在真正的「片长 − L」上。
+  const outputDurationSec =
+    durations.reduce((acc, d) => acc + d, 0) - transition * Math.max(0, segments.length - 1);
+  const loop = loopCloseSec(outputDurationSec, options.loopCloseSec);
+  let videoOutput = "[vout]";
+  let audioOutput = "[aout]";
+  if (loop > 0) {
+    parts.push(loopCloseVideoStage("[vout]", "[vloop]", outputDurationSec, loop));
+    parts.push(loopCloseAudioStage("[aout]", "[aloop]", outputDurationSec, loop));
+    videoOutput = "[vloop]";
+    audioOutput = "[aloop]";
+  }
+
   const crf = Number.isFinite(options.crf) ? String(options.crf) : "18";
   const preset = options.preset ?? "veryfast";
   return [
@@ -580,8 +864,8 @@ export function buildJumpCutArgs(
     "-i", inputPath,
     "-t", toFfmpegTime(readDuration),
     "-filter_complex", parts.join(";"),
-    "-map", "[vout]",
-    "-map", "[aout]",
+    "-map", videoOutput,
+    "-map", audioOutput,
     ...videoEncoderArgs(options.encoder ?? "libx264", Number(crf), preset),
     "-pix_fmt", "yuv420p",
     ...(options.color ? colorOutputArgs(options.color) : []),

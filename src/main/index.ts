@@ -1196,6 +1196,8 @@ ipcMain.handle("hotclip:export-clips", async (event, filePath: unknown, clips: u
         : undefined,
       publish: publishCopies?.get(c.id),
       keywords: c.keywords,
+      // 收口成环:评审判过「最后一句绕回第一句」的短片段(见 export.ts ExportClipSpec.loop)
+      loop: c.loop === true ? true : undefined,
       meta: {
         hook: c.hook,
         // 冷开场预览句(cold-open):有它才用,没它沿用 meta.hook(旧行为)

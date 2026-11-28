@@ -11,6 +11,7 @@ import {
   renderSendcmd,
   renderCropXExpr,
   smoothstep,
+  speakerAnchors,
   type FaceSample,
 } from "../reframe/track";
 import { mapToOutputTime, remapCropKeyframes } from "../reframe";
@@ -208,6 +209,87 @@ describe("planCropTrack modes", () => {
       expect(k.x).toBeGreaterThanOrEqual(0);
       expect(k.x).toBeLessThanOrEqual(W - cropW);
     }
+  });
+});
+
+describe("说话人取景(diarization 参与选脸)", () => {
+  const W = 1920;
+  const H = 1080;
+  const cropW = Math.floor((H * 9) / 16 / 2) * 2;
+  const xOf = (c: number): number => Math.round(c * W - cropW / 2);
+  /** 单人帧:只有一张脸;双人帧:左右两张,主脸(最大的那张)在右边。 */
+  const solo = (t: number, c: number): FaceSample => ({ t, cx: c, left: c - 0.03, right: c + 0.03, faceCount: 1, faces: [{ left: c - 0.03, right: c + 0.03 }] });
+  const twoShot = (t: number): FaceSample => ({
+    t,
+    cx: 0.8,
+    left: 0.14,
+    right: 0.86,
+    faceCount: 2,
+    faces: [{ left: 0.14, right: 0.26 }, { left: 0.74, right: 0.86 }],
+  });
+
+  /** 前 6 帧各给一个说话人一段独处(建立锚点),后 6 帧两人同框。 */
+  function scene(): { samples: FaceSample[]; speakers: Array<number | null> } {
+    const samples: FaceSample[] = [];
+    const speakers: Array<number | null> = [];
+    for (let i = 0; i < 3; i++) {
+      samples.push(solo(i / 3, 0.2));
+      speakers.push(0);
+    }
+    for (let i = 3; i < 6; i++) {
+      samples.push(solo(i / 3, 0.8));
+      speakers.push(1);
+    }
+    for (let i = 6; i < 12; i++) {
+      samples.push(twoShot(i / 3));
+      speakers.push(0);
+    }
+    return { samples, speakers };
+  }
+
+  it("speakerAnchors:只在单人帧上学,样本太少不采信", () => {
+    const { samples, speakers } = scene();
+    const anchors = speakerAnchors(samples, speakers);
+    expect(anchors.get(0)).toBeCloseTo(0.2, 3);
+    expect(anchors.get(1)).toBeCloseTo(0.8, 3);
+    // 只有两帧单人镜头 → 不建锚点
+    expect(speakerAnchors(samples.slice(0, 2), [0, 0]).size).toBe(0);
+  });
+
+  it("两张脸挤不下时跟说话的人,而不是最大的那张", () => {
+    const { samples, speakers } = scene();
+    const planned = planCropComposition(samples, [], W, H, speakers)!;
+    expect(planned.stats.speakerShots).toBe(1);
+    // 末帧说话人是 0(左边那位):裁窗落在左脸那一侧,不是主脸 0.8。
+    const last = cropXAtTime(planned.keyframes, samples[samples.length - 1].t);
+    expect(Math.abs(last - xOf(0.2))).toBeLessThan(Math.abs(last - xOf(0.8)));
+    // 不给说话人数据 → 老行为:跟主脸(右边那张)。
+    const blind = planCropComposition(samples, [], W, H)!;
+    expect(cropXAtTime(blind.keyframes, samples[samples.length - 1].t)).toBeGreaterThan(xOf(0.6));
+    expect(blind.stats.speakerShots).toBe(0);
+  });
+
+  it("两个人都装得下时仍然锁全景,说话人不插手", () => {
+    const samples: FaceSample[] = [];
+    const speakers: Array<number | null> = [];
+    for (let i = 0; i < 3; i++) {
+      samples.push(solo(i / 3, 0.5));
+      speakers.push(0);
+    }
+    for (let i = 3; i < 9; i++) {
+      samples.push({
+        t: i / 3,
+        cx: 0.55,
+        left: 0.44,
+        right: 0.6,
+        faceCount: 2,
+        faces: [{ left: 0.44, right: 0.5 }, { left: 0.54, right: 0.6 }],
+      });
+      speakers.push(0);
+    }
+    const planned = planCropComposition(samples, [], W, H, speakers)!;
+    expect(planned.stats.lockedShots).toBe(1);
+    expect(planned.stats.speakerShots).toBe(0);
   });
 });
 

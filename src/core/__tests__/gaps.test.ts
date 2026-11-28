@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeJumpCut, mergeShortCuts } from "../gaps";
+import { computeJumpCut, mergeShortCuts, splitLongSegments } from "../gaps";
 import { buildJumpCutArgs } from "../cut";
 import { quietRunAt, type PeakTrack } from "../audio-peaks";
 import type { TranscriptWord } from "../../shared/api-types";
@@ -162,8 +162,13 @@ describe("buildJumpCutArgs", () => {
     expect(args[args.indexOf("-ss") + 1]).toBe("00:00:10.000");
     const fc = args[args.indexOf("-filter_complex") + 1];
     expect(fc).toContain("[0:v:0]trim=start=0.000:end=2.200");
-    expect(fc).toContain("[0:a:0]atrim=start=3.900:end=6.300");
-    expect(fc).toContain("concat=n=2:v=1:a=1");
+    // 拼缝借的是被切掉的那段静音:前段声音多走 0.15s(L-cut),后段早进 0.15s
+    // (J-cut),acrossfade 用 2×0.15 抵掉,总长仍等于画面总长。
+    expect(fc).toContain("[0:a:0]atrim=start=0.000:end=2.350");
+    expect(fc).toContain("[0:a:0]atrim=start=3.750:end=6.300");
+    // 画面硬切;声音走 acrossfade(拼缝 1.7s 静音够长)。
+    expect(fc).toContain("[v0][v1]concat=n=2:v=1:a=0");
+    expect(fc).toContain("acrossfade=d=0.300:c1=qsin:c2=qsin[aout]");
     expect(args).toContain("[vout]");
     expect(args).toContain("[aout]");
   });
@@ -230,5 +235,131 @@ describe("首尾补进真静音(成片开头/结尾的词不能被切半)", () =
     const plan = computeJumpCut(words, 10, 12, { peaks });
     expect(plan.segments[0].startSec).toBeCloseTo(10.05, 3); // 10.2 − 0.15 前导
     expect(plan.segments[0].endSec).toBeCloseTo(11.8, 3); // 11.5 + 0.3 尾巴
+  });
+});
+
+describe("splitLongSegments(节奏目标:长镜头补刀)", () => {
+  const hopSec = 1 / 30;
+  /** [from, to, peak] 铺出来的峰值轨;未覆盖的块 = 0.01(静音)。 */
+  function track(spans: Array<[number, number, number]>, startSec = 0, endSec = 24): PeakTrack {
+    const values = new Float32Array(Math.ceil((endSec - startSec) / hopSec)).fill(0.01);
+    for (const [from, to, peak] of spans) {
+      const first = Math.max(0, Math.floor((from - startSec) / hopSec));
+      for (let i = first; i < values.length && startSec + i * hopSec < to - 1e-9; i++) values[i] = peak;
+    }
+    return { values, startSec, hopSec };
+  }
+  /** 每 step 秒一个词、词长 len 秒;gap 处正确留白。 */
+  function words(from: number, to: number, step = 0.5, len = 0.4): TranscriptWord[] {
+    const out: TranscriptWord[] = [];
+    for (let t = from; t + len <= to; t += step) out.push(w("字", t, t + len));
+    return out;
+  }
+
+  it("切口取目标附近最宽的词间缝的中点——绝不在词里下刀", () => {
+    const seq = [...words(0, 4.5), w("长", 4.6, 5.0), w("后", 6.0, 6.5), ...words(6.5, 12)];
+    const out = splitLongSegments([{ startSec: 0, endSec: 12 }], 6, seq);
+    expect(out[0]).toEqual({ startSec: 0, endSec: 5.5 }); // 1.0s 宽的缝 → 取中线
+    for (const seg of out) expect(seg.endSec - seg.startSec).toBeLessThanOrEqual(6);
+    expect(out[out.length - 1].endSec).toBe(12);
+    // 段段首尾相接、缺口为零 → 音频取自同一段源,一个样本都不变
+    for (let i = 1; i < out.length; i++) expect(out[i].startSec).toBe(out[i - 1].endSec);
+  });
+
+  it("全是连续语流(词间没有缝)就不切,宁可不达标", () => {
+    const out = splitLongSegments([{ startSec: 0, endSec: 12 }], 6, [w("一口气说完", 0, 12)]);
+    expect(out).toEqual([{ startSec: 0, endSec: 12 }]);
+  });
+
+  it("缝里其实是响声(笑声/掌声)时不下刀——峰值说了才算静音", () => {
+    const seq = words(0, 12);
+    const loud = track([[0, 12, 0.4]]); // 全程有声:词间缝是笑声,不是静音
+    expect(splitLongSegments([{ startSec: 0, endSec: 12 }], 6, seq, loud)).toEqual([
+      { startSec: 0, endSec: 12 },
+    ]);
+    const quiet = track([[0, 4.7, 0.4], [6.2, 12, 0.4]]); // 5.1-6.2 真静音
+    const split = splitLongSegments([{ startSec: 0, endSec: 12 }], 6, seq, quiet);
+    expect(split).toHaveLength(2);
+    expect(split[0].endSec).toBeGreaterThan(5.0);
+    expect(split[0].endSec).toBeLessThan(6.2);
+  });
+
+  it("短过一个镜头的不动;补出来的每一段都够长(不造碎镜头)", () => {
+    expect(splitLongSegments([{ startSec: 0, endSec: 5 }], 6, words(0, 5))).toEqual([
+      { startSec: 0, endSec: 5 },
+    ]);
+    const tight = splitLongSegments([{ startSec: 0, endSec: 3 }], 1.5, words(0, 3));
+    expect(tight.length).toBeGreaterThan(1);
+    for (const seg of tight) expect(seg.endSec - seg.startSec).toBeGreaterThanOrEqual(0.8);
+    expect(tight[0].startSec).toBe(0);
+    expect(tight[tight.length - 1].endSec).toBe(3);
+  });
+
+  it("不设上限(∞/0)时一个字节都不动", () => {
+    const segs = [{ startSec: 0, endSec: 12 }];
+    expect(splitLongSegments(segs, Infinity, words(0, 12))).toEqual(segs);
+    expect(splitLongSegments(segs, 0, words(0, 12))).toEqual(segs);
+  });
+});
+
+describe("computeJumpCut 的节奏目标(maxShotSec)", () => {
+  // 一段 12 秒不停口的话:词间只有 0.1s 缝,静音剪一个都剪不掉
+  const words = Array.from({ length: 24 }, (_, i) => w("话", 10 + i * 0.5, 10.4 + i * 0.5));
+
+  it("长镜头被切成几刀,成片总长和字幕时间轴都不变", () => {
+    const base = computeJumpCut(words, 10, 22);
+    expect(base.segments).toHaveLength(1);
+    expect(base.durationSec).toBeCloseTo(12, 3);
+    const split = computeJumpCut(words, 10, 22, { maxShotSec: 5 });
+    expect(split.longShotsSplit).toBe(split.segments.length - 1);
+    expect(split.longShotsSplit).toBeGreaterThanOrEqual(2);
+    for (const seg of split.segments) expect(seg.endSec - seg.startSec).toBeLessThanOrEqual(5);
+    // 总时长一模一样:补刀只挪画面切点,音频是从同一段源连续取的
+    expect(split.durationSec).toBeCloseTo(base.durationSec, 3);
+    // 每个新镜头都是一个换行点(字幕得跟着画面走)
+    expect(split.breaks).toHaveLength(split.segments.length - 1);
+    // 字幕时间轴不变:词还落在成片里同一个位置
+    expect(split.words.map((x) => x.startSec)).toEqual(base.words.map((x) => x.startSec));
+  });
+
+  it("密度曲线:开场与收口比中段切得密,中段仍听品类档", () => {
+    const long = Array.from({ length: 60 }, (_, i) => w("话", i * 0.5, 0.4 + i * 0.5)); // 30 秒不停口
+    const split = computeJumpCut(long, 0, 30, { maxShotSec: 10 });
+    // 开场 3 秒内已经换过画面
+    expect(split.segments[0].endSec - split.segments[0].startSec).toBeLessThanOrEqual(3.05);
+    for (const seg of split.segments) expect(seg.endSec - seg.startSec).toBeLessThanOrEqual(10);
+    // 输出时间轴上累出每段起点,数一数收口 5 秒里有几刀
+    let u = 0;
+    const starts: number[] = [];
+    for (const seg of split.segments) {
+      starts.push(u);
+      u += seg.endSec - seg.startSec;
+    }
+    expect(u).toBeCloseTo(30, 3);
+    expect(starts.filter((s) => s >= u - 5)).toHaveLength(2); // 收口 5 秒 = 3 段(≤4 秒一镜)
+    expect(split.breaks).toHaveLength(split.segments.length - 1);
+  });
+
+  it("刀落在周围词最稀的那条缝里(词/秒 ≈ 信息密度)", () => {
+    /** 每 0.5 秒一个 0.4 秒的词:连续语流,词间一律 0.1 秒缝。 */
+    const dense = (from: number, to: number) =>
+      Array.from({ length: Math.max(0, Math.round((to - from) / 0.5)) }, (_, i) =>
+        w("密", from + i * 0.5, from + i * 0.5 + 0.4)
+      );
+    const seq = [
+      ...dense(0, 5),
+      w("静", 5.0, 7.2), w("静", 7.3, 9.6), // 慢速长词:7.2→7.3 同样是 0.1 秒缝
+      ...dense(9.7, 20),
+    ];
+    const out = splitLongSegments([{ startSec: 0, endSec: 20 }], 10, seq);
+    // 目标 10 秒、搜索窗 [7,10]:7.25 那条缝周围只有两个长词,信息最稀 → 刀落那儿;
+    // 9.65 那条离目标更近,但夹在密语流里,不该抢
+    expect(out[0].endSec).toBeCloseTo(7.25, 2);
+  });
+
+  it("不限(∞/缺省)时与历史成片逐字节一致", () => {
+    const base = computeJumpCut(words, 10, 22);
+    expect(computeJumpCut(words, 10, 22, { maxShotSec: Infinity }).segments).toEqual(base.segments);
+    expect(computeJumpCut(words, 10, 22, {}).longShotsSplit).toBeUndefined();
   });
 });

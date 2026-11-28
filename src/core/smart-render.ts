@@ -47,6 +47,11 @@ export function canCopyVideoStream(
   keyframes: number[]
 ): boolean {
   if (!media.hasVideo || media.videoCodec.toLowerCase() !== "h264") return false;
+  // 环形收口重排尾段画面(倒放融合),不是能复制的像素。
+  if (options.loopCloseSec && options.loopCloseSec > 0) return false;
+  // 自动运镜(zoompan)同样改像素,但它不在 buildVideoFilters 的返回里,得单独挡:
+  // 横屏出口没有固定的 scale 链,漏挡就会静默走 -c:v copy,整层运镜白写。
+  if (options.autoZoom) return false;
   if (options.watermark || buildVideoFilters(options).length > 0) return false;
   return isKeyframeAligned(startSec, media.fps, keyframes);
 }

@@ -54,6 +54,8 @@ export interface CropPlanningStats {
   centeredShots: number;
   /** Shots where the planned crop leaves some face below 90% visible. */
   clippedShots: number;
+  /** Shots that followed the speaker instead of the biggest face. */
+  speakerShots?: number;
 }
 
 export interface CropPlanningResult {
@@ -144,12 +146,56 @@ export function smoothstep(u: number): number {
  * Per-sample subject target. When every visible face at this instant fits the
  * crop, aim at the middle of them (co-present faces stay in frame); otherwise
  * follow the main face — two far-apart people cannot share one 9:16 window,
- * and splitting the difference would clip both.
+ * and splitting the difference would clip both. `want` (normalized x a speaker
+ * is expected at) overrides the main face when two people are too far apart to
+ * share the crop: the one who is talking stays in frame, the other may not.
  */
-function subjectTarget(s: FaceSample & { cx: number }, cropFrac: number): number {
+function subjectTarget(s: FaceSample & { cx: number }, cropFrac: number, want: number | null = null): number {
+  if (want !== null && s.faces && s.faces.length > 1) return nearestFaceCenter(s.faces, want);
   const left = Math.min(s.left ?? s.cx, s.cx);
   const right = Math.max(s.right ?? s.cx, s.cx);
   return right - left <= cropFrac ? (left + right) / 2 : s.cx;
+}
+
+/** Center of the visible face closest to `want`. */
+function nearestFaceCenter(faces: Array<{ left: number; right: number }>, want: number): number {
+  let best = (faces[0].left + faces[0].right) / 2;
+  for (const f of faces) {
+    const c = (f.left + f.right) / 2;
+    if (Math.abs(c - want) < Math.abs(best - want)) best = c;
+  }
+  return best;
+}
+
+/** Single-face samples needed before a speaker's position is trusted. */
+const SPEAKER_ANCHOR_MIN_SAMPLES = 3;
+
+/**
+ * Where each speaker sits in the source frame, learned from the frames where
+ * only ONE face is visible: during that speaker's turn the lone face has to be
+ * theirs. Median, so one stray detection can't drag the anchor.
+ */
+export function speakerAnchors(
+  samples: FaceSample[],
+  activeSpeakers: Array<number | null>
+): Map<number, number> {
+  const seen = new Map<number, number[]>();
+  samples.forEach((s, i) => {
+    const speaker = activeSpeakers[i];
+    if (speaker === null || speaker === undefined) return;
+    const faces = s.faces;
+    if (!faces || faces.length !== 1) return;
+    const list = seen.get(speaker) ?? [];
+    list.push((faces[0].left + faces[0].right) / 2);
+    seen.set(speaker, list);
+  });
+  const anchors = new Map<number, number>();
+  for (const [speaker, centers] of seen) {
+    if (centers.length < SPEAKER_ANCHOR_MIN_SAMPLES) continue;
+    const sorted = [...centers].sort((a, b) => a - b);
+    anchors.set(speaker, sorted[Math.floor(sorted.length / 2)]);
+  }
+  return anchors;
 }
 
 function hasSustainedLoss(samples: FaceSample[]): boolean {
@@ -207,12 +253,24 @@ export function planCropComposition(
   samples: FaceSample[],
   cuts: number[],
   srcW: number,
-  srcH: number
+  srcH: number,
+  activeSpeakers?: Array<number | null>
 ): CropPlanningResult | null {
   const cropW = Math.floor((srcH * 9) / 16 / 2) * 2;
   if (cropW >= srcW || samples.length === 0) return null;
   const coverage = samples.filter((s) => s.cx !== null).length / samples.length;
   if (coverage < MIN_COVERAGE) return null;
+  // 说话人锚点:整片只在「画面里只有一张脸」的时刻学,学不到就整条路照旧。
+  const anchors =
+    activeSpeakers && activeSpeakers.length === samples.length ? speakerAnchors(samples, activeSpeakers) : new Map<number, number>();
+  const wantOf = new Map<FaceSample, number | null>();
+  if (anchors.size > 0) {
+    samples.forEach((s, i) => {
+      const speaker = activeSpeakers?.[i];
+      const anchor = speaker === null || speaker === undefined ? undefined : anchors.get(speaker);
+      wantOf.set(s, anchor ?? null);
+    });
+  }
 
   const cropFrac = cropW / srcW;
   // 留 1 像素边距:运镜的超采样链要在窗口左右各借 1 像素(见 cut.ts 的
@@ -246,6 +304,7 @@ export function planCropComposition(
     recoveryShots: 0,
     centeredShots: 0,
     clippedShots: 0,
+    speakerShots: 0,
   };
   const keyframes: CropKeyframe[] = [];
   for (const segment of segments) {
@@ -282,7 +341,8 @@ export function planCropComposition(
       continue;
     }
 
-    const xs = visible.map((s) => subjectTarget(s, cropFrac));
+    const xs = visible.map((s) => subjectTarget(s, cropFrac, wantOf.get(s) ?? null));
+    if (wantOf.size > 0 && visible.some((s) => wantOf.get(s) != null && (s.faces?.length ?? 0) > 1)) stats.speakerShots = (stats.speakerShots ?? 0) + 1;
     const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
     const std = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length);
     const median = [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
@@ -323,7 +383,10 @@ export function planCropComposition(
         // grid drops the second end of a stillness (so the crop creeps across
         // it) and spends the same keyframes on a quiet stretch as on a sweep.
         const euro = new OneEuro();
-        const curve = visible.map((s) => ({ t: s.t, x: euro.filter(subjectTarget(s, cropFrac), s.t) }));
+        const curve = visible.map((s) => ({
+          t: s.t,
+          x: euro.filter(subjectTarget(s, cropFrac, wantOf.get(s) ?? null), s.t),
+        }));
         const emit = (run: Array<{ t: number; x: number }>): void => {
           for (const point of simplifyTrack(run, srcW)) {
             keyframes.push({ t: point.t, x: clampX(point.x) });

@@ -14,6 +14,12 @@ import { probeMedia } from "./probe";
 import { EDGE_FADE_SEC } from "./cut";
 import { formatLintIssue, type LintHit } from "./content-lint";
 import { peakAt, EDGE_QUIET_PEAK, type PeakTrack } from "./audio-peaks";
+import {
+  createFrameDiffMeter,
+  computeEditMetrics,
+  METRONOME_CV,
+  type EditMetrics,
+} from "./edit-metrics";
 import type { TranscriptWord } from "../shared/api-types";
 import type { AppLang } from "../shared/ui-lang";
 
@@ -50,6 +56,8 @@ export interface ClipQaReport {
   hookPayoffMissing: string[] | null;
   /** 人脸取景的采样覆盖率;没跑人脸取景为 null。 */
   subjectCoverage?: SubjectCoverage | null;
+  /** 剪辑度量(切点画面变化/镜头节奏/最长静止窗);没量到为 null。 */
+  edit?: EditMetrics | null;
   /** 自动修复记录(qa 修复循环执行过才有);见 repair.ts。 */
   repair?: QaRepairRecord;
 }
@@ -111,18 +119,47 @@ export function missingHookPayoffs(hookText: string | undefined, transcriptText:
   return missing;
 }
 
+/** 事件时刻归一到「片头 0、片尾 duration、中间的取正」并去重排序。 */
+function visualEventPts(eventsSec: number[], durationSec: number): number[] {
+  return [...new Set([0, ...eventsSec.filter((t) => t > 0 && t < durationSec), durationSec])].sort(
+    (a, b) => a - b
+  );
+}
+
 /**
  * 视觉事件序列(拼接缝/跳剪缝/高潮前置接缝等,输出时间轴)→ 最长无变化
  * 间隔。片头片尾各算一个天然事件。纯函数;调用方在有字幕/自动运镜兜底时
  * 不必调用(连续的视觉变化已覆盖节奏)。
  */
 export function maxVisualGapSec(eventsSec: number[], durationSec: number): number {
-  const pts = [...new Set([0, ...eventsSec.filter((t) => t > 0 && t < durationSec), durationSec])].sort(
-    (a, b) => a - b
-  );
+  const pts = visualEventPts(eventsSec, durationSec);
   let maxGap = 0;
   for (let i = 1; i < pts.length; i++) maxGap = Math.max(maxGap, pts[i] - pts[i - 1]);
   return Number(maxGap.toFixed(2));
+}
+
+/**
+ * 节奏补点:让每一段「无视觉变化间隔」都不超过上限,返回要**插进去**的时刻。
+ * 间隔 m 切成 n+1 段,取 n = floor(m/上限)(至少 1),于是每段 m/(n+1) ≤ 上限/2
+ * ——留一倍余量,浮点取整再怎么抖也不会压线。只插在两端天然事件之间,不挪动
+ * 任何已有事件(切片不能凭空多切一刀,镜头可以动一下)。纯函数。
+ */
+export function pacingPunchPoints(
+  eventsSec: number[],
+  durationSec: number,
+  maxGapSec: number = PACING_MAX_GAP_SEC
+): number[] {
+  if (!(durationSec > 0) || !(maxGapSec > 0)) return [];
+  const pts = visualEventPts(eventsSec, durationSec);
+  const out: number[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    const from = pts[i - 1];
+    const gap = pts[i] - from;
+    if (!(gap > maxGapSec)) continue;
+    const n = Math.max(1, Math.floor(gap / maxGapSec));
+    for (let k = 1; k <= n; k++) out.push(Number((from + (gap * k) / (n + 1)).toFixed(2)));
+  }
+  return out;
 }
 
 /** blackdetect 输出解析:`black_start:1.2 black_end:2.0 ...`(同行成对)。 */
@@ -276,6 +313,10 @@ export interface QaAssessment {
   hookPayoffMissing?: string[] | null;
   /** 人脸取景样本的主体覆盖汇总;缺省 = 未使用人脸取景。 */
   subjectCoverage?: SubjectCoverage | null;
+  /** 剪辑度量(edit-metrics.ts 算好传入);缺省 = 没量。
+   *  注意是「另外量」而不是替代 pacingGapSec:那条按剪辑计划算最大静止窗,
+   *  这条按成片画面实测,两者口径不同,不互相顶替。 */
+  editMetrics?: EditMetrics | null;
   /** 告警句式语言;缺省 zh(CLI/MCP 不传,回执与既有版本逐字节相同)。 */
   lang?: AppLang;
 }
@@ -283,6 +324,9 @@ export interface QaAssessment {
 const fmtSec = (v: number): string => v.toFixed(1);
 /** 土耳其语小数用逗号(1,5 sn),不共用 fmtSec 的点号口径。 */
 const trSec = (v: number): string => v.toFixed(1).replace(".", ",");
+/** 土耳其语百分比同样用逗号小数(6,1)。 */
+const trPct = (v: number): string => v.toFixed(1).replace(".", ",");
+const trNum = (v: number): string => v.toFixed(2).replace(".", ",");
 
 /**
  * 告警句式三语表。质检报告是给创作者读的(与 AIGC 标记、成片包目录名同一类),
@@ -300,6 +344,8 @@ interface QaText {
   pacing(gapSec: number): string;
   hookUnpaid(list: string): string;
   faceClipped(ratio: number, worst: number): string;
+  invisibleCuts(count: number, minChangePct: number): string;
+  metronome(cv: number): string;
 }
 const QA_TEXT: Record<AppLang, QaText> = {
   zh: {
@@ -315,6 +361,10 @@ const QA_TEXT: Record<AppLang, QaText> = {
       `钩子/标题承诺的「${list}」未在片中出现(不兑付=标题党,完播率与账号权重双降,建议改钩子或换切点)`,
     faceClipped: (ratio, worst) =>
       `竖屏取景有 ${(ratio * 100).toFixed(0)}% 采样帧未完整保留人脸(最差 ${(worst * 100).toFixed(0)}%,建议检查构图)`,
+    invisibleCuts: (n, pct) =>
+      `有 ${n} 处切点画面几乎没变(最不明显的一刀只动了 ${pct.toFixed(1)}% 的画面,剪了等于没剪)`,
+    metronome: (cv) =>
+      `镜头长度几乎一样(变异系数 ${cv.toFixed(2)}),节奏像节拍器(建议长短镜头交替)`,
   },
   en: {
     durationMismatch: (a, e, d) => `Clip length ${fmtSec(a)}s differs from the expected ${fmtSec(e)}s by ${fmtSec(d)}s`,
@@ -329,6 +379,10 @@ const QA_TEXT: Record<AppLang, QaText> = {
       `The hook/title promises "${list}" but the clip never delivers it (an unpaid promise reads as clickbait; completion and account weight both drop — change the hook or the cut)`,
     faceClipped: (ratio, worst) =>
       `${(ratio * 100).toFixed(0)}% of sampled frames do not keep the whole face in frame (worst ${(worst * 100).toFixed(0)}%, check the framing)`,
+    invisibleCuts: (n, pct) =>
+      `The picture barely changes at ${n} cut(s) (the flattest moves only ${pct.toFixed(1)}% of the frame — a cut nobody sees)`,
+    metronome: (cv) =>
+      `Shots are near-identical in length (coefficient of variation ${cv.toFixed(2)}) — the rhythm reads metronomic (alternate long and short)`,
   },
   tr: {
     durationMismatch: (a, e, d) => `Klip süresi ${trSec(a)} sn, beklenen ${trSec(e)} sn (${trSec(d)} sn sapma)`,
@@ -343,6 +397,10 @@ const QA_TEXT: Record<AppLang, QaText> = {
       `Kanca/başlık "${list}" diye söz veriyor ama klip bunu karşılamıyor (söz tutulmazsa tıklama tuzağı; izlenme tamamlama ve hesap ağırlığı düşer — kancayı ya da kesimi değiştirin)`,
     faceClipped: (ratio, worst) =>
       `Dikey kadrajda örneklenen karelerin %${(ratio * 100).toFixed(0)}'inde yüz tam görünmüyor (en kötü %${(worst * 100).toFixed(0)}, çerçeveyi kontrol edin)`,
+    invisibleCuts: (n, pct) =>
+      `${n} kesimde görüntü neredeyse hiç değişmiyor (en silik kesim karenin yalnızca %${trPct(pct)}'ini oynatıyor — kimsenin görmediği bir kesim)`,
+    metronome: (cv) =>
+      `Plan uzunlukları birbirine çok yakın (değişim katsayısı ${trNum(cv)}) — ritim metronom gibi (uzun ve kısa planları karıştırın)`,
   },
 };
 
@@ -390,6 +448,15 @@ export function assessClipQa(input: QaAssessment): ClipQaReport {
   }
   const lintIssue = formatLintIssue(input.contentHits ?? [], lang);
   if (lintIssue) issues.push(lintIssue);
+  // 剪辑度量:画面没变的切点一刀一刀都是白剪;镜头一样长像节拍器。
+  // 「最长静止窗」不在这里告警——按计划算的那条(pacingGapSec)已经管,
+  // 实测这条只作连续量进报告(96×96 上字幕/运镜会被平均掉)。
+  if (input.editMetrics && input.editMetrics.invisibleCuts > 0) {
+    issues.push(t.invisibleCuts(input.editMetrics.invisibleCuts, (input.editMetrics.minCutChange ?? 0) * 100));
+  }
+  if (input.editMetrics && input.editMetrics.cuts >= 5 && input.editMetrics.cv !== null && input.editMetrics.cv < METRONOME_CV) {
+    issues.push(t.metronome(input.editMetrics.cv));
+  }
   return {
     status: issues.length > 0 ? "warn" : "pass",
     issues,
@@ -406,36 +473,64 @@ export function assessClipQa(input: QaAssessment): ClipQaReport {
     pacingGapSec: input.pacingGapSec ?? null,
     hookPayoffMissing: input.hookPayoffMissing ?? null,
     subjectCoverage: input.subjectCoverage ?? null,
+    edit: input.editMetrics ?? null,
   };
 }
 
 /** stderr 收集上限:detect 行 + ebur128 汇总远小于此,防素材异常刷爆内存。 */
 const STDERR_CAP = 4 * 1024 * 1024;
+/** 灰度帧流尺寸(单帧 9KB)。96×96 足够量「画面变没变」,又不把整条流留在内存里。 */
+const FRAME_TRACK_W = 96;
+const FRAME_TRACK_H = 96;
+const FRAME_BYTES = FRAME_TRACK_W * FRAME_TRACK_H;
+
+/** 一遍解码的产出:检测文本 + 逐帧画面变化。 */
+export interface ClipScan {
+  /** 完整 stderr(blackdetect/silencedetect 行散布全程,ebur128 汇总在末尾)。 */
+  stderr: string;
+  /** 逐帧「变化像素占比」(相邻帧,96×96 灰度;见 edit-metrics.ts)。 */
+  frameDiffs: number[];
+}
 
 /**
- * 解码扫描一遍成片,收集完整 stderr(blackdetect/silencedetect 行散布
- * 全程,ebur128 汇总在末尾——不能像 runFfmpeg 那样只留尾部)。
+ * 解码扫描一遍成片,两个输出:检测流写 null(复用 stderr 管道,不落盘)、
+ * 灰度帧流走 stdout 且逐帧差分当场算掉(见 edit-metrics.ts 的差分器)。
+ * 加这一路是白捡的——本来就整片解一遍,灰度流顺着同一条解码走,不再多跑一遍 ffmpeg。
  */
-export async function scanClipMedia(path: string, signal?: AbortSignal): Promise<string> {
+export async function scanClip(path: string, signal?: AbortSignal): Promise<ClipScan> {
   const args = [
     "-hide_banner", "-nostats",
     "-i", path,
     "-vf", `blackdetect=d=${BLACK_MIN_SEC}:pix_th=0.10,freezedetect=n=${FREEZE_NOISE}:d=${FREEZE_MIN_SEC}`,
     "-af", `silencedetect=n=-50dB:d=${SILENCE_MIN_SEC},ebur128=peak=true`,
-    "-f", "null", "-",
+    "-f", "null", "pipe:2",
+    "-map", "0:v:0",
+    "-vf", `scale=${FRAME_TRACK_W}:${FRAME_TRACK_H},format=gray`,
+    "-an",
+    "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
   ];
-  return await new Promise<string>((resolve, reject) => {
-    const child = spawn(resolveFfmpegPath(), args, { stdio: ["ignore", "ignore", "pipe"], signal });
+  return await new Promise<ClipScan>((resolve, reject) => {
+    const child = spawn(resolveFfmpegPath(), args, { stdio: ["ignore", "pipe", "pipe"], signal });
+    const meter = createFrameDiffMeter(FRAME_BYTES);
+    const frameDiffs: number[] = [];
     let stderr = "";
-    child.stderr.on("data", (d: Buffer) => {
+    child.stdout?.on("data", (d: Buffer) => {
+      for (const v of meter.push(d)) frameDiffs.push(v);
+    });
+    child.stderr?.on("data", (d: Buffer) => {
       if (stderr.length < STDERR_CAP) stderr += d.toString();
     });
     child.on("error", (e) => reject(e));
     child.on("close", (code) => {
-      if (code === 0) resolve(stderr);
+      if (code === 0) resolve({ stderr, frameDiffs });
       else reject(new Error(`qa scan exited ${code}`));
     });
   });
+}
+
+/** 只要检测文本的老入口(帧流丢掉)。 */
+export async function scanClipMedia(path: string, signal?: AbortSignal): Promise<string> {
+  return (await scanClip(path, signal)).stderr;
 }
 
 export interface RunClipQaOptions {
@@ -459,6 +554,9 @@ export interface RunClipQaOptions {
   hookPayoffMissing?: string[] | null;
   /** 已按最终保留片段过滤的人脸覆盖汇总。 */
   subjectCoverage?: SubjectCoverage | null;
+  /** 成片输出时间轴上的真实切点(跳剪缝/拼接缝/冷开接缝;不是运镜补点):
+   *  给了才量切点画面变化与镜头节奏。 */
+  cutTimesSec?: number[];
   /** 告警句式语言(界面语言);缺省 zh,CLI/MCP 回执不变。 */
   lang?: AppLang;
   signal?: AbortSignal;
@@ -466,7 +564,8 @@ export interface RunClipQaOptions {
 
 /** 对一条成片跑完整质检:解码扫描 + ffprobe 时长 + 切点核对 → 报告。 */
 export async function runClipQa(path: string, opts: RunClipQaOptions): Promise<ClipQaReport> {
-  const [stderr, info] = await Promise.all([scanClipMedia(path, opts.signal), probeMedia(path)]);
+  const [scan, info] = await Promise.all([scanClip(path, opts.signal), probeMedia(path)]);
+  const { stderr } = scan;
   return assessClipQa({
     durationSec: info.durationSec,
     expectedDurationSec: opts.expectedDurationSec,
@@ -487,6 +586,15 @@ export async function runClipQa(path: string, opts: RunClipQaOptions): Promise<C
     pacingGapSec: opts.pacingGapSec,
     hookPayoffMissing: opts.hookPayoffMissing,
     subjectCoverage: opts.subjectCoverage,
+    editMetrics:
+      info.fps > 0 && scan.frameDiffs.length > 0
+        ? computeEditMetrics({
+            frameDiffs: scan.frameDiffs,
+            fps: info.fps,
+            cutTimesSec: opts.cutTimesSec ?? [],
+            durationSec: info.durationSec,
+          })
+        : null,
     lang: opts.lang,
   });
 }

@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { findPeakEvents, type PeakTrack } from "../audio-peaks";
 import { computeJumpCut } from "../gaps";
-import { genrePauseGapSec, DEFAULT_PAUSE_GAP_SEC } from "../genre";
-import { maxVisualGapSec, assessClipQa, PACING_MAX_GAP_SEC } from "../qa";
+import { genrePauseGapSec, genreMaxShotSec, DEFAULT_PAUSE_GAP_SEC, DEFAULT_MAX_SHOT_SEC } from "../genre";
+import { maxVisualGapSec, pacingPunchPoints, assessClipQa, PACING_MAX_GAP_SEC } from "../qa";
 import { buildCaptionAss, minimalText, VERTICAL_LAYOUT } from "../subtitle";
 import type { TranscriptWord } from "../../shared/api-types";
 
@@ -78,6 +78,21 @@ describe("genrePauseGapSec(品类停顿分档)", () => {
   });
 });
 
+describe("genreMaxShotSec(品类节奏目标)", () => {
+  it("画面品类设上限,「把一件事说完」的品类不限", () => {
+    expect(genreMaxShotSec("game")).toBeLessThanOrEqual(6);
+    expect(genreMaxShotSec("pet")).toBeLessThan(genreMaxShotSec("talk")!);
+    // 知识/访谈/手工的看点是信息自足,补刀会把信息切碎
+    expect(genreMaxShotSec("knowledge")).toBe(Infinity);
+    expect(genreMaxShotSec("interview")).toBe(Infinity);
+    expect(genreMaxShotSec("craft")).toBe(Infinity);
+    expect(genreMaxShotSec("auto")).toBe(Infinity);
+    expect(genreMaxShotSec(undefined)).toBe(Infinity);
+    expect(genreMaxShotSec("live-sell")).toBe(genreMaxShotSec("shopping"));
+    expect(DEFAULT_MAX_SHOT_SEC).toBe(Infinity);
+  });
+});
+
 describe("qa 节奏信号", () => {
   it("maxVisualGapSec:事件之间的最长间隔(含片头片尾)", () => {
     expect(maxVisualGapSec([], 30)).toBe(30);
@@ -102,6 +117,25 @@ describe("qa 节奏信号", () => {
     const pass = assessClipQa({ ...base, pacingGapSec: null });
     expect(pass.status).toBe("pass");
     expect(pass.pacingGapSec).toBeNull();
+  });
+
+  it("pacingPunchPoints:只给超长窗补点,补完每个窗都不超上限", () => {
+    expect(pacingPunchPoints([], 3)).toEqual([]); // 本来就不超
+    expect(pacingPunchPoints([], 5)).toEqual([]); // 恰好压线不补(判据是 > 上限)
+    expect(pacingPunchPoints([], 6)).toEqual([3]); // 6 切两半
+    expect(pacingPunchPoints([], 20)).toEqual([4, 8, 12, 16]); // 20 切五段,每段 4 ≤ 5
+    // 只有超长的那两段被补:3→30 切六段(4.5 一段)、30→40 切三段
+    expect(pacingPunchPoints([3, 30], 40)).toEqual([7.5, 12, 16.5, 21, 25.5, 33.33, 36.67]);
+    // 病态输入不炸
+    expect(pacingPunchPoints([], 0)).toEqual([]);
+    expect(pacingPunchPoints([NaN, -3], 8)).toEqual([4]);
+  });
+
+  it("pacingPunchPoints:补完的点真的把最长静止窗压到线下", () => {
+    for (const dur of [6, 12, 23.5, 60]) {
+      const punched = pacingPunchPoints([], dur);
+      expect(maxVisualGapSec(punched, dur)).toBeLessThanOrEqual(PACING_MAX_GAP_SEC);
+    }
   });
 });
 

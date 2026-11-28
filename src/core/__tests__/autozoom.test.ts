@@ -73,6 +73,14 @@ describe("planZoomKeyframes", () => {
     expect(lead).toBeDefined();
   });
 
+  it("breathZoom 压成基准 = 只做强调推近(节奏兜底那一层)", () => {
+    const kfs = planZoomKeyframes(30, { emphasisAtSec: [8, 20], breathZoom: ZOOM_BASE, emphasisZoom: ZOOM_BREATH });
+    const bumped = kfs.filter((k) => k.z > ZOOM_BASE);
+    // 只有两处推近,幅度是呼吸峰值;中间那 12 秒不呼吸(全为基准)
+    expect(bumped.every((k) => k.z === ZOOM_BREATH)).toBe(true);
+    expect(kfs.filter((k) => k.t > 10 && k.t < 18).every((k) => k.z === ZOOM_BASE)).toBe(true);
+  });
+
   it("挨得很近的多个强调并成一段长推近,不来回抽搐", () => {
     const kfs = planZoomKeyframes(40, { emphasisAtSec: [20, 20.5, 21] });
     // 只推近一次、只回落一次

@@ -1,8 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { assignWordSpeakers, speakerCount, dominantSpeaker, labelTranscript, type SpeakerTurn } from "../diarize";
+import { assignWordSpeakers, speakerCount, speakerTurnsFromWords, dominantSpeaker, labelTranscript, type SpeakerTurn } from "../diarize";
 import type { Transcript, TranscriptWord } from "../../shared/api-types";
 
 const w = (text: string, s: number, e: number): TranscriptWord => ({ text, startSec: s, endSec: e });
+
+describe("speakerTurnsFromWords", () => {
+  it("同一个人连续的话并成一段,换人开新段", () => {
+    const words: TranscriptWord[] = [
+      { ...w("a", 1, 1.5), speaker: 0 },
+      { ...w("b", 1.6, 2.2), speaker: 0 },
+      { ...w("c", 2.3, 2.9), speaker: 1 },
+    ];
+    expect(speakerTurnsFromWords(words)).toEqual([
+      { startSec: 1, endSec: 2.2, speaker: 0 },
+      { startSec: 2.3, endSec: 2.9, speaker: 1 },
+    ]);
+  });
+
+  it("长停顿切断同一段;没标注的词直接跳过(整条稿未分离 → 返回空)", () => {
+    const words: TranscriptWord[] = [
+      { ...w("a", 1, 1.5), speaker: 0 },
+      { ...w("b", 5, 5.5), speaker: 0 },
+    ];
+    expect(speakerTurnsFromWords(words)).toHaveLength(2);
+    expect(speakerTurnsFromWords([w("x", 1, 2)])).toEqual([]);
+  });
+});
 
 describe("assignWordSpeakers", () => {
   const turns: SpeakerTurn[] = [

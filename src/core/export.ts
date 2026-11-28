@@ -19,6 +19,7 @@ import {
   pickColdSeamTransition,
   evenFrame,
   COLD_SEAM_XFADE_SEC,
+  LOOP_CLOSE_SEC,
   type CutOptions,
 } from "./cut";
 import { measurePieceColors, planPieceColorGrades } from "./color-match";
@@ -58,7 +59,7 @@ import {
   snapEdgeToQuiet,
   snapSpansToQuiet,
 } from "./audio-peaks";
-import { genrePauseGapSec } from "./genre";
+import { genreMaxShotSec, genrePauseGapSec } from "./genre";
 import {
   planSfxCues,
   ensureSfxAssets,
@@ -68,6 +69,7 @@ import {
 } from "./sound-design";
 import { detectUiCrop, type UiCrop } from "./uicrop";
 import { generateCropPlan, renderCropXExpr, mapToOutputTime, remapCropKeyframes } from "./reframe";
+import { speakerTurnsFromWords, type SpeakerTurn } from "./diarize";
 import type { AnalysisVideoOptions } from "./analysis-video";
 import { snapClipToShots, SNAP_MAX_OUT_SEC } from "./shots";
 import { collectSignalsEvidence, detectShotBoundariesEvidence, detectSpeechActivityEvidence } from "./media-evidence";
@@ -82,7 +84,9 @@ import { buildCaptionAss, VERTICAL_LAYOUT, HORIZONTAL_LAYOUT, type CaptionStyle 
 import { lintSubtitleTimeline } from "./subtitle-quality";
 import { buildOverlayPayload, isWebCaptionStyle, type OverlayRenderFn, type WebCaptionStyle } from "./caption-overlay/payload";
 import { probeMedia } from "./probe";
-import { runClipQa, maxVisualGapSec, missingHookPayoffs, summarizeSubjectCoverage, type ClipQaReport } from "./qa";
+import { runClipQa, maxVisualGapSec, pacingPunchPoints, missingHookPayoffs, summarizeSubjectCoverage, type ClipQaReport } from "./qa";
+import { planHookRamp } from "./speed-ramp";
+import type { FillMode } from "./fill";
 import { lintClipContent } from "./content-lint";
 import { mapSensitiveRanges } from "./sensitive-words";
 import { planRepair, applyRepair } from "./repair";
@@ -145,6 +149,13 @@ export interface ExportClipSpec {
    * 闪不出来(全程无显著峰)按既有 fail-open 回退普通开场。
    */
   flashForward?: boolean;
+  /**
+   * 收口成环:选段时 AI 评审已判定「最后一句绕回第一句」的短片段(≤30s)。
+   * 画面最后 0.3 秒倒放融回第一帧、声音等功率融合,重播看不出接缝
+   * (见 cut.ts LOOP_CLOSE_SEC)。与冷开场/爆点前置互斥——那两样会在正片前
+   * 接一段迷你片,收口收的就不是成片的第一帧了。
+   */
+  loop?: boolean;
   /** Evidence-chain fields carried into clips.json for CMS/matrix pipelines. */
   meta?: {
     hook: string;
@@ -197,11 +208,12 @@ async function cropPlanOverPieces(
   clipStartSec: number,
   modelsRoot: string,
   uiCrop?: UiCrop,
-  analysis?: AnalysisVideoOptions
+  analysis?: AnalysisVideoOptions,
+  speakerTurns?: SpeakerTurn[]
 ): Promise<Awaited<ReturnType<typeof generateCropPlan>>> {
   let merged: Awaited<ReturnType<typeof generateCropPlan>> = null;
   for (const p of pieces) {
-    const cp = await generateCropPlan(inputPath, p.startSec, p.endSec, modelsRoot, uiCrop, analysis).catch(() => null);
+    const cp = await generateCropPlan(inputPath, p.startSec, p.endSec, modelsRoot, uiCrop, analysis, speakerTurns).catch(() => null);
     if (!cp) continue;
     const shift = p.startSec - clipStartSec;
     const kfs = cp.keyframes.map((k) => ({ ...k, t: k.t + shift }));
@@ -217,6 +229,7 @@ async function cropPlanOverPieces(
       merged.composition.recoveryShots += cp.composition.recoveryShots;
       merged.composition.centeredShots += cp.composition.centeredShots;
       merged.composition.clippedShots += cp.composition.clippedShots;
+      merged.composition.speakerShots = (merged.composition.speakerShots ?? 0) + (cp.composition.speakerShots ?? 0);
     }
   }
   return merged;
@@ -282,6 +295,8 @@ export interface ClipRenderOutcome {
     centeredShots: number;
     /** Shots whose planned crop leaves a face below 90% visible. */
     clippedShots: number;
+    /** Shots that framed the speaker instead of the biggest face. */
+    speakerShots?: number;
   };
   /** Jump-cut / filler splice outcome; null when the clip was cut whole. */
   edit: { splices: number; keptSec: number; removedSec: number; cutRatio: number } | null;
@@ -375,6 +390,12 @@ export interface ExportRenderOptions {
   locale?: string;
   /** Center-crop reframe to 9:16 (1080×1920). */
   vertical?: boolean;
+  /**
+   * 竖屏重构的填边方式(见 core/fill.ts):`crop` 缺省=居中裁掉两侧,`blur`=
+   * 整帧缩到宽度居中、底下垫模糊放大版。只对「没有跟拍目标、没有运镜」的
+   * 竖屏切片生效;横屏出口不受影响。缺省保持历史行为。
+   */
+  fillMode?: FillMode;
   /** Caption style to burn in (clips must carry `words`); omit for none. */
   captionStyle?: CaptionStyle | WebCaptionStyle;
   /** Injected web-overlay renderer (Electron main); required for web styles. */
@@ -897,6 +918,9 @@ export async function exportClips(
             forceCutSpans,
             // 静音阈值按品类分档:解说 0.4s、口播 0.6s、对谈 0.9s(genre.ts)
             gapThresholdSec: options.jumpCut ? genrePauseGapSec(options.genreId) : Infinity,
+            // 节奏目标:同样按品类分档,但只压长镜头(游戏 6s、萌宠 5s…),
+            // 知识/访谈这类「把一件事说完」的品类不限(genreMaxShotSec 返回 ∞)
+            maxShotSec: options.jumpCut ? genreMaxShotSec(options.genreId) : Infinity,
             protectedSpans,
             // 保留呼吸口:每个剪口在句尾多留一口气,不是无缝贴死
             breathPadSec: options.keepBreath ? BREATH_PAD_SEC : 0,
@@ -1004,10 +1028,13 @@ export async function exportClips(
       if (options.vertical && options.faceTrack && options.modelsRoot && !audioOnly) {
         // 拼接片逐段各算一版:整段跨度可能有几十分钟,人脸检测按跨度跑纯属白烧。
         // 每段的关键帧相对本段起点,统一平移到「相对切片起点」再走同一条重映射。
+        // 谁在说话 → 两张脸挤不进一个 9:16 时优先留住说话的人(diarization
+        // 没跑就是空数组,取景完全走老路)。
+        const speakerTurns = speakerTurnsFromWords(captionWords ?? []);
         const cp = stitched
-          ? await cropPlanOverPieces(inputPath, pieces, clip.startSec, options.modelsRoot, uiCrop, sourceAnalysis)
+          ? await cropPlanOverPieces(inputPath, pieces, clip.startSec, options.modelsRoot, uiCrop, sourceAnalysis, speakerTurns)
           : await generateCropPlan(
-              inputPath, clip.startSec, clip.endSec, options.modelsRoot, uiCrop, sourceAnalysis
+              inputPath, clip.startSec, clip.endSec, options.modelsRoot, uiCrop, sourceAnalysis, speakerTurns
             ).catch(() => null);
         if (cp) {
           let kfs = cp.keyframes;
@@ -1085,8 +1112,9 @@ export async function exportClips(
       // 不做。帧率未知就不开——zoompan 会把素材重采样到 25fps。
       // 强调时刻 = 最响的几个峰值事件——「推近必须绑定真实事件」,纯呼吸
       // 之外镜头语言要和内容对上(autozoom.ts 本就支持,这里把信号接通)
-      const autoZoom =
-        options.autoZoom && !audioOnly && srcInfo && srcInfo.fps > 0 && srcWidth > 0 && srcHeight > 0
+      const zoomReady = !audioOnly && Boolean(srcInfo && srcInfo.fps > 0 && srcWidth > 0 && srcHeight > 0);
+      const baseAutoZoom =
+        options.autoZoom && zoomReady && srcInfo
           ? {
               durationSec: clipDuration,
               fps: srcInfo.fps,
@@ -1094,6 +1122,26 @@ export async function exportClips(
               ...zoomGeometry(Boolean(trackPlan)),
             }
           : undefined;
+      // 节奏兜底:整片既无字幕也无用户运镜时,超过硬顶的静止窗交给 QA 只会得到
+      // 一条修不了的告警(见 qa.ts PACING_MAX_GAP_SEC)。这里自己先补——在长窗
+      // 中点插一次轻推近,镜头动一下 QA 也就没得警。补点算在**正片时间轴**上:
+      // 冷开场只是把整条正片右移、窗长一个不少,偏移量对判据没有影响。
+      // 关了质检就不补(不请自来的运镜)。
+      const pacingPunchAtSec =
+        options.qa === false || baseAutoZoom || audioOnly || wantCaptions || !zoomReady
+          ? []
+          : pacingPunchPoints(plan?.breaks ?? [], clipDuration);
+      const autoZoom =
+        baseAutoZoom ??
+        (pacingPunchAtSec.length > 0 && srcInfo
+          ? {
+              durationSec: clipDuration,
+              fps: srcInfo.fps,
+              emphasisAtSec: pacingPunchAtSec,
+              punchOnly: true,
+              ...zoomGeometry(Boolean(trackPlan)),
+            }
+          : undefined);
       const sensitiveMuteRanges =
         options.muteTerms && clip.words
           ? mapSensitiveRanges(clip.words, options.muteTerms, plan?.segments ?? [{ startSec: clip.startSec, endSec: clip.endSec }])
@@ -1109,14 +1157,20 @@ export async function exportClips(
       const punchIn = options.punchIn !== false && srcWidth > 0 && srcHeight > 0
         ? { width: srcWidth, height: srcHeight }
         : undefined;
+      // 环形收口只对「从头播到尾」的成片成立:冷开场/爆点前置会在正片前面接
+      // 一段迷你片,那时成片的第一帧不是正片的第一帧,收口会收错地方——宁可不做。
+      const loopWanted =
+        Boolean(clip.loop) && !options.coldOpen && !options.flashForward && !clip.flashForward;
+      const loopCloseSecOpt = loopWanted ? LOOP_CLOSE_SEC : 0;
       const cutOptions: CutOptions = trackPlan
-        ? { ...sourceStreams, srcW: srcWidth, srcH: srcHeight, trackPlan, autoZoom, visualEnhance, color: activeColor, subtitlePath, fontsDir: subtitlePath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: sensitiveMuteRanges, watermark, metadata: aigcMeta, crf: options.crf, encoder: videoEncoder }
+        ? { ...sourceStreams, srcW: srcWidth, srcH: srcHeight, trackPlan, autoZoom, visualEnhance, color: activeColor, subtitlePath, fontsDir: subtitlePath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: sensitiveMuteRanges, watermark, metadata: aigcMeta, crf: options.crf, encoder: videoEncoder, loopCloseSec: loopCloseSecOpt }
         : {
             ...sourceStreams,
             srcW: srcWidth,
             srcH: srcHeight,
             uiCrop,
             vertical: options.vertical,
+            fillMode: options.fillMode,
             autoZoom,
             visualEnhance,
             color: activeColor,
@@ -1129,18 +1183,23 @@ export async function exportClips(
             metadata: aigcMeta,
             crf: options.crf,
             encoder: videoEncoder,
+            loopCloseSec: loopCloseSecOpt,
           };
       const baseKind = audioOnly ? "audiogram" : baseSegments.length > 1 ? "jump-cut" : "cut";
+      // v2:跳剪拼缝的声音换成「以画面切点为中心」的等功率交叠(L-cut/J-cut),
+      // 不再是两侧各 30ms 的淡入淡出。选项没变,出来的字节变了——同一批选项的
+      // 旧跳剪缓存是「接缝上凹一刀」那版,必须失效重出。
       const cacheKey = renderCacheReady
         ? createRenderCacheKey({
             source: cacheSource,
-            implementation: "export-base-v1",
+            implementation: "export-base-v2",
             kind: baseKind,
             segments: baseSegments,
             options: {
               uiCrop,
               ...sourceStreams,
               vertical: options.vertical,
+              fillMode: options.fillMode,
               autoZoom,
               visualEnhance,
               color: activeColor,
@@ -1160,6 +1219,7 @@ export async function exportClips(
               punchIn,
               colorMatch: options.colorMatch !== false,
               transitionSec: options.transitionSec,
+              loopCloseSec: loopCloseSecOpt,
               audiogram: audioOnly ? audiogramSpec(Boolean(options.vertical), options.brand?.highlightColor) : undefined,
             },
           })
@@ -1378,6 +1438,11 @@ export async function exportClips(
           const miniPath = outPath.replace(/\.mp4$/, ".hook.mp4");
           const bodyPath = outPath.replace(/\.mp4$/, ".body.mp4");
           const miniDur = coPlan.endSec - coPlan.startSec;
+          // 爆点闪现是预告片:1.4× 变速(画面 setpts + 声音 atempo,音高不变)。
+          // 字幕按源时间烧进迷你片、烧完再压缩时间戳,卡拉OK 自动跟着快。
+          // 迷你片在成片里的时长 = miniOutDur,coldOpenSec 及下游全读它。
+          const hookRamp = planHookRamp({ sourceSec: miniDur, isFlash: flashForwardUsed });
+          const miniOutDur = hookRamp ? hookRamp.outputSec : miniDur;
           // 接缝走了过场就缩短了 [0, coldOpenSec) 的偏移(见下方 crossfadeClips)
           let seamFadeSec = 0;
           const ok = await (async (): Promise<boolean> => {
@@ -1405,7 +1470,9 @@ export async function exportClips(
             // 条片子两段裁窗可能建立在不同口径的探针结果上。
             let miniTrack;
             if (trackPlan && options.modelsRoot) {
-              const cp = await generateCropPlan(inputPath, coPlan.startSec, coPlan.endSec, options.modelsRoot, uiCrop, sourceAnalysis).catch(() => null);
+              const cp = await generateCropPlan(
+                inputPath, coPlan.startSec, coPlan.endSec, options.modelsRoot, uiCrop, sourceAnalysis, speakerTurnsFromWords(captionWords ?? [])
+              ).catch(() => null);
               if (cp && cp.keyframes.length > 0) {
                 miniTrack = { cropXExpr: renderCropXExpr(cp.keyframes), cropW: cp.cropW, cropH: cp.cropH, cropY: cp.cropY };
               }
@@ -1422,8 +1489,8 @@ export async function exportClips(
                 ? { durationSec: miniDur, fps: srcInfo.fps, punchTo: ZOOM_PUNCH_END, ...zoomGeometry(Boolean(miniTrack)) }
                 : undefined;
             const miniCutOptions = miniTrack
-              ? { ...sourceStreams, srcW: srcWidth, srcH: srcHeight, trackPlan: miniTrack, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder }
-              : { ...sourceStreams, srcW: srcWidth, srcH: srcHeight, uiCrop, vertical: options.vertical, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder };
+              ? { ...sourceStreams, srcW: srcWidth, srcH: srcHeight, trackPlan: miniTrack, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, speedRate: hookRamp?.rate, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder }
+              : { ...sourceStreams, srcW: srcWidth, srcH: srcHeight, uiCrop, vertical: options.vertical, fillMode: options.fillMode, autoZoom: miniPunch, visualEnhance: miniVisualEnhance, color: activeColor, subtitlePath: miniAssPath, fontsDir: miniAssPath ? options.fontsDir : undefined, normalizeLoudness: baseNormalizeLoudness, denoise: baseDenoise, speedRate: hookRamp?.rate, muteRanges: options.muteTerms && clip.words ? mapSensitiveRanges(clip.words, options.muteTerms, [{ startSec: coPlan.startSec, endSec: coPlan.endSec }]) : undefined, watermark, crf: options.crf, encoder: videoEncoder };
             // 迷你片是新编码的,正片若来自 -c:v copy 或缓存,两者的 SPS/PPS
             // 不同——`-f concat -c copy` 只发布第一段(迷你片)的参数集,正片
             // 帧按错误的参数解码,接缝处就是花屏/卡顿。只在真要前置时把正片
@@ -1440,13 +1507,13 @@ export async function exportClips(
             // 换了」——观众看不到「剪」。改成 xfade 交叠(甩镜/擦除/淡化按
             // 切片 id 确定性轮换),whoosh 的峰值正好压在交叠开始处。
             // 两段都太短(交叠会吃掉内容)就回退硬切拼接,照旧出片。
-            if (miniDur > COLD_SEAM_XFADE_SEC + 0.15 && clipDuration > COLD_SEAM_XFADE_SEC + 0.15) {
+            if (miniOutDur > COLD_SEAM_XFADE_SEC + 0.15 && clipDuration > COLD_SEAM_XFADE_SEC + 0.15) {
               await crossfadeClips(
                 miniPath,
                 bodyPath,
                 outPath,
                 {
-                  headSec: miniDur,
+                  headSec: miniOutDur,
                   transitionSec: COLD_SEAM_XFADE_SEC,
                   transition: pickColdSeamTransition(clip.id),
                   crf: options.crf,
@@ -1473,7 +1540,7 @@ export async function exportClips(
             await rm(miniPath, { force: true }).catch(() => {});
             return false;
           });
-          if (ok) coldOpenSec = miniDur - seamFadeSec;
+          if (ok) coldOpenSec = miniOutDur - seamFadeSec;
         }
       }
 
@@ -1566,17 +1633,31 @@ export async function exportClips(
         // 节奏评估:字幕逐块上屏/自动运镜/音频波形图本身就是持续视觉变化,
         // 有其一就不评;其余按剪辑计划(跳剪缝/拼接缝/高潮前置接缝)算最长
         // 无视觉变化间隔,超 5s 在 qa 里告警(见 qa.ts PACING_MAX_GAP_SEC)
-        const pacingCovered = Boolean(autoZoom) || (wantCaptions && !webRenderFailed) || audioOnly;
+        // 补点算进事件序列:补过之后这条判据应该自己降到线下,报告才诚实地记
+        // 「现在的最大静止窗」,而不是因为我们动过镜头就把它藏起来。
+        const pacingCovered = Boolean(baseAutoZoom) || (wantCaptions && !webRenderFailed) || audioOnly;
         const pacingGapSec = pacingCovered
           ? null
           : maxVisualGapSec(
-              [...(plan?.breaks ?? []).map((b) => b + (coldOpenSec ?? 0)), ...(coldOpenSec ? [coldOpenSec] : [])],
+              [
+                ...(plan?.breaks ?? []).map((b) => b + (coldOpenSec ?? 0)),
+                ...pacingPunchAtSec.map((t) => t + (coldOpenSec ?? 0)),
+                ...(coldOpenSec ? [coldOpenSec] : []),
+              ],
               clipDuration + (coldOpenSec ?? 0)
             );
+        // 成片上的真实切点(输出时间轴):跳剪缝 + 冷开接缝。运镜补点
+        // (pacingPunchAtSec)不算——它不是硬切,推近是 0.4s 渐进的,按单帧
+        // 边界量必然读出「没变」,会变成假告警。
+        const qaCutTimesSec = [
+          ...(plan?.breaks ?? []).map((b) => b + (coldOpenSec ?? 0)),
+          ...(coldOpenSec ? [coldOpenSec] : []),
+        ];
         const qaOptsBase = {
           loudnessNormalized: Boolean(options.normalizeLoudness),
           words: clip.words,
           segments: plan ? plan.segments : [{ startSec: clip.startSec, endSec: clip.endSec }],
+          cutTimesSec: qaCutTimesSec,
           // 真音频证据 + 冷开迷你片两端:切点核对按「那一下有没有切进发声」判,
           // 不再信估出来的词边界
           peaks: clipPeaks,
@@ -1613,7 +1694,14 @@ export async function exportClips(
               repairPlan,
               qaReport,
               (fixedPath) =>
-                runClipQa(fixedPath, { ...qaOptsBase, expectedDurationSec: expected - repairPlan.trimmedSec }),
+                runClipQa(fixedPath, {
+                  ...qaOptsBase,
+                  expectedDurationSec: expected - repairPlan.trimmedSec,
+                  // 修复裁了头,切点跟着前移;裁掉的切点直接丢
+                  cutTimesSec: qaCutTimesSec
+                    .map((t) => Number((t - repairPlan.trimStartSec).toFixed(3)))
+                    .filter((t) => t > 0),
+                }),
               signal,
               activeColor,
               repairMedia?.videoStreamIndex,
