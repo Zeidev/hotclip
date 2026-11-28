@@ -4,7 +4,7 @@
  * 这次还怎么出。多人对谈(diarize)故意不记:它对单视频生效,换素材要重判。
  */
 import { create } from "zustand";
-import type { CaptionStyleChoice, ClipLength, ExportQuality, PromptLangChoice } from "../../../shared/api-types";
+import type { CaptionStyleChoice, ClipLength, ExportQuality, FillMode, PromptLangChoice } from "../../../shared/api-types";
 import { validPlatformIds } from "../../../shared/platform-specs";
 import { DEFAULT_MAX_CLIPS, isClipLength, normalizeMaxClips, normalizePromptLang } from "../../../shared/detection-options";
 import { DEFAULT_SENSITIVE_WORDS, sanitizeSensitiveWords } from "../../../core/sensitive-words";
@@ -14,6 +14,12 @@ const STORAGE_KEY = "hotclip-render-prefs";
 
 export interface RenderPrefs {
   vertical: boolean;
+  /**
+   * 竖屏成片空出来的边怎么处理(见 core/fill.ts):`crop` = 居中裁掉两侧
+   * (历史做法,也是出厂默认);`blur` = 整帧缩到宽度居中,底下垫一层模糊
+   * 压暗的放大版。只在没有跟拍目标、没开自动运镜的竖屏切片上生效。
+   */
+  fillMode: FillMode;
   captionStyle: CaptionStyleChoice;
   jumpCut: boolean;
   /**
@@ -101,6 +107,7 @@ function defaultPackPlatforms(): string[] {
 
 export const RENDER_PREF_DEFAULTS: RenderPrefs = {
   vertical: true,
+  fillMode: "crop", // 出厂与老版本成片一致:居中裁剪;模糊填边由用户显式选
   captionStyle: "keyword",
   jumpCut: true,
   transitionSec: 0, // 硬切是历史行为;交叉淡化改变时间轴,由用户显式开
@@ -193,6 +200,8 @@ function load(): RenderPrefs {
       if (!["keyword", "pop", "kinetic", "minimal", "hormozi", "bubble", "karaoke", "none"].includes(out.captionStyle)) out.captionStyle = "keyword";
       if (!["off", "volume", "premium"].includes(out.aiCover)) out.aiCover = "off";
       if (!["basic", "smart"].includes(out.denoiseMode)) out.denoiseMode = "basic";
+      // 老版本的偏好里没有这个字段,或存了没法认的值 → 回到历史行为(裁剪)
+      if (out.fillMode !== "blur") out.fillMode = "crop";
       return out;
     }
   } catch {

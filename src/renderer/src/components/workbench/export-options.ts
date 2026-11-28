@@ -26,6 +26,9 @@ export function buildRenderToggles(opts: {
     // 文案与变体包装的语言:与检测参数同口径(auto 按转写判定,可显式钉死)
     promptLang: prefs.promptLang,
     vertical: prefs.vertical,
+    // 竖屏填边方式:面板里的选择原样进管线(core/fill.ts 只在竖屏出口、
+    // 没有跟拍/运镜时才认它,其余情况自己回落裁剪)
+    fillMode: prefs.fillMode,
     captionStyle: prefs.captionStyle,
     jumpCut: prefs.jumpCut,
     // 0 = hard cut; only a jump cut has splices to fade.

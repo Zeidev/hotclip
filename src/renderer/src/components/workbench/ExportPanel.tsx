@@ -11,7 +11,7 @@ import { useLlmStore } from "../../stores/llm-store";
 import { useSchemes, BUILTIN_SCHEMES, matchesScheme, schemeLabel } from "../../stores/scheme-store";
 import { localized, PLATFORM_SPECS } from "../../../../shared/platform-specs";
 import { ModalShell, SectionLabel, Segmented, SwitchRow } from "../ui";
-import type { CaptionStyleChoice } from "../../../../shared/api-types";
+import type { CaptionStyleChoice, FillMode } from "../../../../shared/api-types";
 
 const CAPTION_ORDER: CaptionStyleChoice[] = ["keyword", "pop", "kinetic", "bubble", "hormozi", "minimal", "karaoke", "none"];
 const CAPTION_KEY: Record<CaptionStyleChoice, string> = {
@@ -129,6 +129,19 @@ export function ExportPanel({
         <div className="mt-3.5 grid min-h-0 flex-1 grid-cols-1 gap-2.5 overflow-y-auto pr-1 sm:grid-cols-2">
           <Group title={t("groupPicture")}>
             <SwitchRow label={th("optVertical")} hint={th("optVerticalHint")} on={prefs.vertical} onToggle={() => setPref({ vertical: !prefs.vertical })} />
+            <div className="flex min-h-7.5 items-center gap-2.5 pl-2" title={th("optFillHint")}>
+              <span className={`min-w-0 flex-1 truncate text-[12.5px] ${prefs.vertical ? "text-fg/90" : "text-mut/60"}`}>{th("optFill")}</span>
+              <Segmented<FillMode>
+                value={prefs.fillMode}
+                ariaLabel={th("optFill")}
+                disabled={!prefs.vertical}
+                options={[
+                  { value: "crop", label: th("optFillCrop") },
+                  { value: "blur", label: th("optFillBlur") },
+                ]}
+                onChange={(v) => setPref({ fillMode: v })}
+              />
+            </div>
             <SwitchRow
               label={th("optAlsoLandscape")}
               hint={th("optAlsoLandscapeHint")}

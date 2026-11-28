@@ -94,7 +94,7 @@ import { sliceWords } from "@core/subtitle";
 import { wordsInPieces } from "../shared/pieces";
 import { snapContextAround } from "@core/shots";
 import { renderCaptionOverlay } from "./overlay-renderer";
-import { QUALITY_CRF } from "../shared/api-types";
+import { QUALITY_CRF, normalizeFillMode } from "../shared/api-types";
 import type { Transcript, TranscriptWord, LlmConfig, HighlightCandidate, ExportOptions, VisionStats, EmotionStats, DanmakuStats, VoiceTagStats, WatchEvent, UpdateInfo, AutomationTask, AutomationTaskStage, WhisperCppStatus, DetectStage } from "../shared/api-types";
 
 const VIDEO_EXTENSIONS = ["mp4", "mkv", "mov", "flv", "ts", "webm", "avi", "m4v"];
@@ -1225,6 +1225,8 @@ ipcMain.handle("hotclip:export-clips", async (event, filePath: unknown, clips: u
       // 界面语言:画面里的 AIGC 标识、.post.txt 提醒、发布包目录名的语言
       locale: opts.locale,
       vertical: Boolean(opts.vertical),
+      // 竖屏填边(v0.39):IPC 来的是 unknown,只认 crop/blur,其余回落裁剪
+      fillMode: normalizeFillMode(opts.fillMode),
       captionStyle: style,
       jumpCut,
       // 保留呼吸口(v0.14):跳剪的剪口留一口气;只在跳剪开着时有意义

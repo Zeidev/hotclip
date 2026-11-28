@@ -9,6 +9,8 @@
  *    web deployment a new adapter, not a rewrite.
  */
 
+import type { FillMode } from "../core/fill";
+
 /** Normalized description of an imported media file. */
 export interface MediaInfo {
   durationSec: number;
@@ -573,6 +575,20 @@ export const QUALITY_CRF: Record<ExportQuality, number> = {
   compact: 28,
 };
 
+/**
+ * 竖屏填边方式(语义见 core/fill.ts):`crop` = 居中裁掉两侧(历史做法),
+ * `blur` = 整帧缩到宽度居中、底下垫一层模糊压暗的放大版。类型唯一来源是
+ * core/fill.ts,这里只做转出,免得两边各长一份枚举悄悄漂移(纯类型引用,
+ * 编译后不留下任何运行时依赖)。
+ */
+export type { FillMode };
+/**
+ * IPC 传上来的值是 unknown:只认两个合法值,别的(老客户端不传、手改的
+ * 里发生了什么)一律当「没指定」,由引擎按历史行为裁剪。CLI/MCP 走同一份契约。
+ */
+export function normalizeFillMode(value: unknown): FillMode | undefined {
+  return value === "blur" ? "blur" : value === "crop" ? "crop" : undefined;
+}
 /** Render options for the export step (UI toggles on the highlight list). */
 export interface ExportOptions {
   /**
@@ -588,6 +604,12 @@ export interface ExportOptions {
   promptLang?: PromptLangChoice;
   /** Center-crop reframe to 9:16 vertical (1080×1920) — short-video ready. */
   vertical: boolean;
+  /**
+   * 竖屏重构时空出来的边怎么处理(见 core/fill.ts):crop 缺省 = 居中裁掉两侧;
+   * blur = 整帧缩到宽度居中,底下垫一层模糊压暗的放大版。只在竖屏出口、
+   * 又没有跟拍目标/自动运镜时生效——横屏出口与构图已有主张的切片照旧裁剪。
+   */
+  fillMode?: FillMode;
   /** Caption style to burn into the picture. */
   captionStyle: CaptionStyleChoice;
   /** Splice out intra-clip silences for a tighter, hand-edited rhythm. */
